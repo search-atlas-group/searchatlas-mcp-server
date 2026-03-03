@@ -284,14 +284,14 @@ Just talk naturally. The AI picks the right tool:
 | `fetch failed` | Check network; run `searchatlas check` |
 | Tools not showing up | Restart your MCP client after adding config |
 
-**Still stuck?** Run `searchatlas check`, make sure Node.js >= 18 (`node --version`), or [open an issue](https://github.com/bennethuzochukwu-cloud/searchatlas-mcp-server/issues).
+**Still stuck?** Run `searchatlas check`, make sure Node.js >= 18 (`node --version`), or [open an issue](https://github.com/Search-Atlas-Group/searchatlas-mcp-server/issues).
 
 ---
 
 ## Development
 
 ```bash
-git clone https://github.com/bennethuzochukwu-cloud/searchatlas-mcp-server.git
+git clone https://github.com/Search-Atlas-Group/searchatlas-mcp-server.git
 cd searchatlas-mcp-server
 npm install && npm run build
 ```

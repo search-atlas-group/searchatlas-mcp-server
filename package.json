@@ -37,11 +37,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/bennethuzochukwu-cloud/searchatlas-mcp-server.git"
+    "url": "https://github.com/Search-Atlas-Group/searchatlas-mcp-server.git"
   },
   "homepage": "https://searchatlas.com",
   "bugs": {
-    "url": "https://github.com/bennethuzochukwu-cloud/searchatlas-mcp-server/issues"
+    "url": "https://github.com/Search-Atlas-Group/searchatlas-mcp-server/issues"
   },
   "author": "SearchAtlas <support@searchatlas.com> (https://searchatlas.com)",
   "license": "MIT",
