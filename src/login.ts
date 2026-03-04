@@ -1,10 +1,11 @@
 /**
  * Interactive login flow — opens the browser, prompts for token, validates it,
- * saves to ~/.searchatlasrc, and displays config snippets for MCP clients.
+ * saves to ~/.searchatlasrc, auto-updates existing MCP config files,
+ * and displays config snippets for clients that weren't auto-updated.
  */
 
 import { createInterface } from 'node:readline/promises';
-import { writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { exec, execSync } from 'node:child_process';
@@ -30,12 +31,6 @@ function openBrowser(url: string): void {
   });
 }
 
-/**
- * Detect the full absolute path to node.
- * GUI apps (Cursor, Claude Desktop, VS Code, Windsurf, Zed) on macOS
- * can't find `node` or `npx` because they don't inherit the user's shell PATH.
- * We resolve the path once here so the printed config snippets just work.
- */
 function resolveNodePath(): string {
   try {
     return execSync('which node', { encoding: 'utf-8' }).trim();
@@ -44,10 +39,6 @@ function resolveNodePath(): string {
   }
 }
 
-/**
- * Detect the global npm modules directory.
- * Used to build the direct path to the installed package entry point.
- */
 function resolveGlobalRoot(): string | null {
   try {
     return execSync('npm root -g', { encoding: 'utf-8' }).trim();
@@ -72,6 +63,195 @@ function saveToken(token: string): void {
   writeFileSync(RC_PATH, lines.join('\n') + '\n', { mode: 0o600 });
 }
 
+/** Resolve the command + args for GUI app configs. */
+function resolveGuiConfig(): { command: string; args: string[] } {
+  const nodePath = resolveNodePath();
+  const globalRoot = resolveGlobalRoot();
+  const entryPoint = globalRoot
+    ? `${globalRoot}/searchatlas-mcp-server/dist/index.js`
+    : null;
+  const hasGlobalInstall = entryPoint && existsSync(entryPoint);
+
+  return hasGlobalInstall
+    ? { command: nodePath, args: [entryPoint!] }
+    : { command: `${dirname(nodePath)}/npx`, args: ['-y', 'searchatlas-mcp-server'] };
+}
+
+/**
+ * Auto-update existing MCP config files with the new token.
+ * Creates global configs (Cursor, Claude Desktop, Windsurf) if they don't exist.
+ * Project-level configs are only updated if they already exist.
+ */
+function autoUpdateConfigs(token: string): string[] {
+  const { command, args } = resolveGuiConfig();
+  const updated: string[] = [];
+  const cwd = process.cwd();
+  const home = homedir();
+
+  // Standard mcpServers shape (Cursor, Claude Desktop, Windsurf)
+  const mcpServersConfig = {
+    mcpServers: {
+      searchatlas: {
+        command,
+        args,
+        env: { SEARCHATLAS_TOKEN: token },
+      },
+    },
+  };
+
+  // VS Code uses "servers" instead of "mcpServers"
+  const vscodeConfig = {
+    servers: {
+      searchatlas: {
+        command,
+        args,
+        env: { SEARCHATLAS_TOKEN: token },
+      },
+    },
+  };
+
+  // All known MCP config file locations
+  const configFiles: Array<{
+    path: string;
+    label: string;
+    template: Record<string, unknown>;
+    tokenPath: string[];
+    global: boolean;
+  }> = [
+    // Cursor — project-level
+    {
+      path: join(cwd, '.cursor', 'mcp.json'),
+      label: 'Cursor (project)',
+      template: mcpServersConfig,
+      tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
+      global: false,
+    },
+    // Cursor — global
+    {
+      path: join(home, '.cursor', 'mcp.json'),
+      label: 'Cursor (global)',
+      template: mcpServersConfig,
+      tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
+      global: true,
+    },
+    // Claude Desktop — macOS
+    {
+      path: join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+      label: 'Claude Desktop',
+      template: mcpServersConfig,
+      tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
+      global: true,
+    },
+    // Windsurf
+    {
+      path: join(home, '.codeium', 'windsurf', 'mcp_config.json'),
+      label: 'Windsurf',
+      template: mcpServersConfig,
+      tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
+      global: true,
+    },
+    // VS Code — project-level
+    {
+      path: join(cwd, '.vscode', 'mcp.json'),
+      label: 'VS Code (project)',
+      template: vscodeConfig,
+      tokenPath: ['servers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
+      global: false,
+    },
+  ];
+
+  for (const config of configFiles) {
+    try {
+      if (existsSync(config.path)) {
+        // File exists — update searchatlas entry
+        const existing = JSON.parse(readFileSync(config.path, 'utf-8'));
+        const didUpdate = setNestedToken(existing, config.tokenPath, token);
+
+        if (didUpdate) {
+          // Also update command + args in case they changed
+          updateCommandAndArgs(existing, config, command, args);
+          writeFileSync(config.path, JSON.stringify(existing, null, 2) + '\n');
+          updated.push(config.label);
+        } else {
+          // searchatlas entry doesn't exist yet — add it
+          mergeSearchatlasEntry(existing, config, command, args, token);
+          writeFileSync(config.path, JSON.stringify(existing, null, 2) + '\n');
+          updated.push(`${config.label} (added)`);
+        }
+      } else if (config.global) {
+        // Global config doesn't exist — create directory + file
+        mkdirSync(dirname(config.path), { recursive: true });
+        writeFileSync(config.path, JSON.stringify(config.template, null, 2) + '\n');
+        updated.push(`${config.label} (created)`);
+      }
+    } catch {
+      // Skip files we can't read/parse/create — don't break the login flow
+    }
+  }
+
+  return updated;
+}
+
+/** Walk a nested object path and set the token value. Returns true if path existed. */
+function setNestedToken(obj: Record<string, unknown>, path: string[], value: string): boolean {
+  let current: Record<string, unknown> = obj;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i];
+    if (current[key] && typeof current[key] === 'object') {
+      current = current[key] as Record<string, unknown>;
+    } else {
+      return false;
+    }
+  }
+  const lastKey = path[path.length - 1];
+  if (lastKey in current) {
+    current[lastKey] = value;
+    return true;
+  }
+  return false;
+}
+
+/** Update command and args for an existing searchatlas entry. */
+function updateCommandAndArgs(
+  obj: Record<string, unknown>,
+  config: { tokenPath: string[] },
+  command: string,
+  args: string[],
+): void {
+  // Navigate to the searchatlas server object (2 levels up from SEARCHATLAS_TOKEN)
+  const serverPath = config.tokenPath.slice(0, -2); // e.g. ['mcpServers', 'searchatlas']
+  let current: Record<string, unknown> = obj;
+  for (const key of serverPath) {
+    if (current[key] && typeof current[key] === 'object') {
+      current = current[key] as Record<string, unknown>;
+    } else {
+      return;
+    }
+  }
+  current['command'] = command;
+  current['args'] = args;
+}
+
+/** Add a searchatlas entry to an existing config that doesn't have one. */
+function mergeSearchatlasEntry(
+  obj: Record<string, unknown>,
+  config: { tokenPath: string[] },
+  command: string,
+  args: string[],
+  token: string,
+): void {
+  const rootKey = config.tokenPath[0]; // 'mcpServers' or 'servers'
+  if (!obj[rootKey] || typeof obj[rootKey] !== 'object') {
+    obj[rootKey] = {};
+  }
+  const root = obj[rootKey] as Record<string, unknown>;
+  root['searchatlas'] = {
+    command,
+    args,
+    env: { SEARCHATLAS_TOKEN: token },
+  };
+}
+
 function indent(json: string): string {
   return json
     .split('\n')
@@ -79,142 +259,58 @@ function indent(json: string): string {
     .join('\n');
 }
 
-function printConfigSnippets(token: string): void {
-  const nodePath = resolveNodePath();
-  const globalRoot = resolveGlobalRoot();
-  const entryPoint = globalRoot
-    ? `${globalRoot}/searchatlas-mcp-server/dist/index.js`
-    : null;
+function printConfigSnippets(token: string, updatedFiles: string[]): void {
+  const { command, args } = resolveGuiConfig();
 
-  // Check if the global install actually exists
-  const hasGlobalInstall = entryPoint && existsSync(entryPoint);
-
-  console.log('\n  ────────────────────────────────────────────');
-  console.log('  Your token (copy this):\n');
-  console.log(`  ${token}`);
-  console.log('\n  ────────────────────────────────────────────');
-
-  console.log('\n  Paste the config below into your MCP client settings:\n');
-
-  if (hasGlobalInstall && nodePath !== 'node') {
-    console.log(
-      '  Tip: Configs below use the full path to node so GUI apps\n' +
-      '  (Cursor, VS Code, Claude Desktop, etc.) can find it.\n',
-    );
+  // Show which files were auto-configured
+  if (updatedFiles.length > 0) {
+    console.log('\n  Auto-configured MCP clients:\n');
+    for (const file of updatedFiles) {
+      console.log(`    ✓ ${file}`);
+    }
+    console.log('');
   }
 
-  // Claude Code — runs in a shell so PATH works. Use simple `npx`.
+  // Determine which clients were already auto-configured
+  const joined = updatedFiles.join(' ');
+  const hasCursor = joined.includes('Cursor');
+  const hasClaudeDesktop = joined.includes('Claude Desktop');
+
+  // Claude Code — always manual (one-liner, no config file)
   console.log('  ── Claude Code ──────────────────────────────\n');
   console.log(
     `  claude mcp add searchatlas -e SEARCHATLAS_TOKEN=${token} -- npx -y searchatlas-mcp-server\n`,
   );
 
-  // For GUI apps: use full node path + global install entry point (most reliable)
-  // Fallback: use npx with PATH if global install not found
-  const guiCommand = hasGlobalInstall ? nodePath : `${dirname(nodePath)}/npx`;
-  const guiArgs = hasGlobalInstall
-    ? [entryPoint!]
-    : ['-y', 'searchatlas-mcp-server'];
+  if (!hasCursor) {
+    console.log('  ── Cursor (~/.cursor/mcp.json) ──────────────\n');
+    console.log(
+      `${indent(JSON.stringify(
+        { mcpServers: { searchatlas: { command, args, env: { SEARCHATLAS_TOKEN: token } } } },
+        null,
+        2,
+      ))}\n`,
+    );
+  }
 
-  // Claude Desktop
-  console.log('  ── Claude Desktop ───────────────────────────\n');
-  console.log(
-    `${indent(JSON.stringify(
-      {
-        mcpServers: {
-          searchatlas: {
-            command: guiCommand,
-            args: guiArgs,
-            env: { SEARCHATLAS_TOKEN: token },
-          },
-        },
-      },
-      null,
-      2,
-    ))}\n`,
-  );
+  if (!hasClaudeDesktop) {
+    console.log('  ── Claude Desktop ───────────────────────────\n');
+    console.log(
+      `${indent(JSON.stringify(
+        { mcpServers: { searchatlas: { command, args, env: { SEARCHATLAS_TOKEN: token } } } },
+        null,
+        2,
+      ))}\n`,
+    );
+  }
 
-  // Cursor
-  console.log('  ── Cursor (.cursor/mcp.json) ────────────────\n');
-  console.log(
-    `${indent(JSON.stringify(
-      {
-        mcpServers: {
-          searchatlas: {
-            command: guiCommand,
-            args: guiArgs,
-            env: { SEARCHATLAS_TOKEN: token },
-          },
-        },
-      },
-      null,
-      2,
-    ))}\n`,
-  );
-
-  // Windsurf
-  console.log('  ── Windsurf (~/.codeium/windsurf/mcp_config.json) ──\n');
-  console.log(
-    `${indent(JSON.stringify(
-      {
-        mcpServers: {
-          searchatlas: {
-            command: guiCommand,
-            args: guiArgs,
-            env: { SEARCHATLAS_TOKEN: token },
-          },
-        },
-      },
-      null,
-      2,
-    ))}\n`,
-  );
-
-  // VS Code
-  console.log('  ── VS Code (.vscode/mcp.json) ───────────────\n');
-  console.log(
-    `${indent(JSON.stringify(
-      {
-        servers: {
-          searchatlas: {
-            command: guiCommand,
-            args: guiArgs,
-            env: { SEARCHATLAS_TOKEN: token },
-          },
-        },
-      },
-      null,
-      2,
-    ))}\n`,
-  );
-
-  // Zed
-  console.log('  ── Zed (settings.json) ──────────────────────\n');
-  console.log(
-    `${indent(JSON.stringify(
-      {
-        context_servers: {
-          searchatlas: {
-            command: {
-              path: guiCommand,
-              args: guiArgs,
-              env: { SEARCHATLAS_TOKEN: token },
-            },
-          },
-        },
-      },
-      null,
-      2,
-    ))}\n`,
-  );
-
-  console.log('  Done! The MCP server will use your token automatically.\n');
+  console.log('  ✦ Done! Restart your MCP client to pick up the new token.\n');
 }
 
 export async function runLogin(): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
-  console.log('\n  SearchAtlas MCP Server — Login\n');
+  console.log('\n  ✦ SearchAtlas MCP Server — Login\n');
   console.log('  Opening SearchAtlas in your browser...\n');
   openBrowser(LOGIN_URL);
 
@@ -231,7 +327,6 @@ export async function runLogin(): Promise<void> {
     process.exit(1);
   }
 
-  // Validate before saving — catches quotes, expired tokens, and garbage
   const result = validateToken(raw);
 
   if (!result.valid) {
@@ -243,7 +338,6 @@ export async function runLogin(): Promise<void> {
     process.exit(1);
   }
 
-  // Warn if token expires within 24 hours
   if (result.expiresAt) {
     const hoursLeft = (result.expiresAt.getTime() - Date.now()) / (1000 * 60 * 60);
     if (hoursLeft < 24) {
@@ -254,9 +348,13 @@ export async function runLogin(): Promise<void> {
     }
   }
 
-  // Save the sanitized token (quotes already stripped)
+  // 1. Save to ~/.searchatlasrc
   saveToken(result.token!);
-  console.log(`\n  Token saved to ${RC_PATH}`);
+  console.log(`\n  ✓ Token saved to ${RC_PATH}`);
 
-  printConfigSnippets(result.token!);
+  // 2. Auto-update any existing MCP config files
+  const updatedFiles = autoUpdateConfigs(result.token!);
+
+  // 3. Print snippets for clients not yet configured
+  printConfigSnippets(result.token!, updatedFiles);
 }

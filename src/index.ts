@@ -11,14 +11,14 @@
  *   --version / -v     Print version
  */
 
-const VERSION = "1.2.1";
+const VERSION = "1.3.0";
 
 const args = process.argv.slice(2);
 
 // --help / -h / help
 if (args.includes("--help") || args.includes("-h") || args.includes("help")) {
   console.log(`
-  SearchAtlas MCP Server v${VERSION}
+  ✦ SearchAtlas MCP Server v${VERSION}
 
   Usage:
     searchatlas-mcp-server              Start the MCP server (stdio)

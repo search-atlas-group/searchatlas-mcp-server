@@ -31,7 +31,7 @@ function fail(msg: string, fix?: string): void {
 }
 
 export async function runCheck(): Promise<void> {
-  console.log("\n  SearchAtlas MCP Server — Health Check\n");
+  console.log("\n  ✦ SearchAtlas MCP Server — Health Check\n");
 
   let config: Config;
   let allPassed = true;
@@ -129,7 +129,7 @@ export async function runCheck(): Promise<void> {
 function printResult(allPassed: boolean): void {
   console.log("");
   if (allPassed) {
-    console.log("  All checks passed — you're ready to go!\n");
+    console.log("  ✦ All checks passed — you're ready to go!\n");
   } else {
     console.log("  Some checks failed. Fix the issues above and run again:\n");
     console.log("    npx searchatlas-mcp-server check\n");
