@@ -1,8 +1,11 @@
 # SearchAtlas MCP Server
 
 [![npm version](https://img.shields.io/npm/v/searchatlas-mcp-server)](https://www.npmjs.com/package/searchatlas-mcp-server)
+[![MCP Registry](https://img.shields.io/badge/MCP-Registry-blue)](https://registry.modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
+
+**[npm](https://www.npmjs.com/package/searchatlas-mcp-server)** · **[MCP Registry](https://registry.modelcontextprotocol.io)** · **[GitHub](https://github.com/Search-Atlas-Group/searchatlas-mcp-server)**
 
 Connect any MCP-compatible AI client to the **SearchAtlas AI Agent platform** — 10 specialized SEO & marketing agents, project management, playbook automation, and more.
 
@@ -54,9 +57,19 @@ The CLI validates your token, saves it, and **prints ready-to-paste configs with
 
 #### Claude Code
 
+**macOS / Linux:**
+
 ```bash
 claude mcp add searchatlas -e SEARCHATLAS_TOKEN=your-token -- npx -y searchatlas-mcp-server
 ```
+
+**Windows (PowerShell):**
+
+```powershell
+claude mcp add searchatlas -e SEARCHATLAS_TOKEN=your-token -- npx.cmd -y searchatlas-mcp-server
+```
+
+> **Windows note:** You must use `npx.cmd` instead of `npx`. This is because Claude Code spawns processes directly and Windows requires the `.cmd` extension.
 
 Done. That's it.
 
@@ -278,6 +291,7 @@ Just talk naturally. The AI picks the right tool:
 | Error | Fix |
 |-------|-----|
 | `spawn npx ENOENT` / `env: node: No such file` | Use full paths (see [Why full paths?](#why-full-paths)) or re-run `searchatlas login` |
+| `spawn npx ENOENT` on Windows (Claude Code) | Use `npx.cmd` instead of `npx` — see [Claude Code](#claude-code) setup |
 | `No SearchAtlas credentials found` | Run `searchatlas login` |
 | `Token expired on ...` | Run `searchatlas login` for a fresh token |
 | `Authentication failed` (401) | Token expired — run `searchatlas login` |

@@ -5,3 +5,6 @@ dist/
 .cursor/
 # Cursor specific files
 .cursor/mcp.json
+# MCP registry auth tokens
+.mcpregistry_github_token                                                                                    
+.mcpregistry_registry_token                                                                                    

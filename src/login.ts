@@ -33,7 +33,10 @@ function openBrowser(url: string): void {
 
 function resolveNodePath(): string {
   try {
-    return execSync('which node', { encoding: 'utf-8' }).trim();
+    const cmd = process.platform === 'win32' ? 'where node' : 'which node';
+    const result = execSync(cmd, { encoding: 'utf-8' }).trim();
+    // `where` on Windows may return multiple lines — take the first
+    return result.split('\n')[0].trim();
   } catch {
     return 'node';
   }
@@ -67,14 +70,18 @@ function saveToken(token: string): void {
 function resolveGuiConfig(): { command: string; args: string[] } {
   const nodePath = resolveNodePath();
   const globalRoot = resolveGlobalRoot();
+  const sep = process.platform === 'win32' ? '\\' : '/';
   const entryPoint = globalRoot
-    ? `${globalRoot}/searchatlas-mcp-server/dist/index.js`
+    ? `${globalRoot}${sep}searchatlas-mcp-server${sep}dist${sep}index.js`
     : null;
   const hasGlobalInstall = entryPoint && existsSync(entryPoint);
 
-  return hasGlobalInstall
-    ? { command: nodePath, args: [entryPoint!] }
-    : { command: `${dirname(nodePath)}/npx`, args: ['-y', 'searchatlas-mcp-server'] };
+  if (hasGlobalInstall) {
+    return { command: nodePath, args: [entryPoint!] };
+  }
+
+  const npxBin = process.platform === 'win32' ? 'npx.cmd' : `${dirname(nodePath)}/npx`;
+  return { command: npxBin, args: ['-y', 'searchatlas-mcp-server'] };
 }
 
 /**
@@ -134,9 +141,11 @@ function autoUpdateConfigs(token: string): string[] {
       tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
       global: true,
     },
-    // Claude Desktop — macOS
+    // Claude Desktop — macOS / Windows
     {
-      path: join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+      path: process.platform === 'win32'
+        ? join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json')
+        : join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
       label: 'Claude Desktop',
       template: mcpServersConfig,
       tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
@@ -277,9 +286,10 @@ function printConfigSnippets(token: string, updatedFiles: string[]): void {
   const hasClaudeDesktop = joined.includes('Claude Desktop');
 
   // Claude Code — always manual (one-liner, no config file)
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   console.log('  ── Claude Code ──────────────────────────────\n');
   console.log(
-    `  claude mcp add searchatlas -e SEARCHATLAS_TOKEN=${token} -- npx -y searchatlas-mcp-server\n`,
+    `  claude mcp add searchatlas -e SEARCHATLAS_TOKEN=${token} -- ${npxCmd} -y searchatlas-mcp-server\n`,
   );
 
   if (!hasCursor) {
