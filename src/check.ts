@@ -98,6 +98,7 @@ export async function runCheck(): Promise<void> {
     const res = await fetch(url, {
       method: "GET",
       headers: getAuthHeaders(config),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (res.status === 401 || res.status === 403) {

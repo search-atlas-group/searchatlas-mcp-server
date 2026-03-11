@@ -17,7 +17,7 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    exec: vi.fn(),
+    spawn: vi.fn(),
     execSync: vi.fn(),
   };
 });
@@ -27,14 +27,15 @@ vi.mock("node:readline/promises", () => ({
 }));
 
 import { writeFileSync, existsSync, readFileSync } from "node:fs";
-import { exec, execSync } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
+import { EventEmitter } from "node:events";
 import { runLogin } from "../login.js";
 
 const mockedWriteFileSync = vi.mocked(writeFileSync);
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedReadFileSync = vi.mocked(readFileSync);
-const mockedExec = vi.mocked(exec);
+const mockedSpawn = vi.mocked(spawn);
 const mockedExecSync = vi.mocked(execSync);
 const mockedCreateInterface = vi.mocked(createInterface);
 
@@ -64,10 +65,11 @@ describe("runLogin", () => {
     // Default: no existing configs
     mockedExistsSync.mockReturnValue(false);
 
-    // exec (for browser open) — no error
-    mockedExec.mockImplementation((_cmd: string, cb: unknown) => {
-      if (typeof cb === "function") (cb as (err: null) => void)(null);
-      return {} as ReturnType<typeof exec>;
+    // spawn (for browser open) — no error by default
+    mockedSpawn.mockImplementation(() => {
+      const child = new EventEmitter() as ReturnType<typeof spawn>;
+      child.unref = vi.fn();
+      return child;
     });
   });
 
@@ -181,7 +183,7 @@ describe("runLogin", () => {
     });
     mockedReadFileSync.mockImplementation((path: unknown) => {
       if (String(path).includes(".searchatlasrc")) {
-        return "SEARCHATLAS_API_URL=https://custom.api.com\nSEARCHATLAS_TOKEN=old-token\n";
+        return "SEARCHATLAS_API_URL=https://staging.searchatlas.com\nSEARCHATLAS_TOKEN=old-token\n";
       }
       throw new Error("no file");
     });
@@ -190,7 +192,7 @@ describe("runLogin", () => {
 
     const writeCall = mockedWriteFileSync.mock.calls[0];
     const content = String(writeCall[1]);
-    expect(content).toContain("SEARCHATLAS_API_URL=https://custom.api.com");
+    expect(content).toContain("SEARCHATLAS_API_URL=https://staging.searchatlas.com");
     expect(content).toContain(`SEARCHATLAS_TOKEN=${token}`);
     expect(content).not.toContain("old-token");
   });
@@ -270,12 +272,19 @@ describe("runLogin", () => {
     };
     mockedCreateInterface.mockReturnValue(mockRl as unknown as ReturnType<typeof createInterface>);
 
-    mockedExec.mockImplementation((_cmd: string, cb: unknown) => {
-      if (typeof cb === "function") (cb as (err: Error) => void)(new Error("no browser"));
-      return {} as ReturnType<typeof exec>;
+    // Spawn emits an error event immediately
+    mockedSpawn.mockImplementation(() => {
+      const child = new EventEmitter() as ReturnType<typeof spawn>;
+      child.unref = vi.fn();
+      // Emit error on next tick so the listener is attached first
+      process.nextTick(() => child.emit("error", new Error("no browser")));
+      return child;
     });
 
     await runLogin();
+
+    // Give the async error event time to fire
+    await new Promise(resolve => setTimeout(resolve, 10));
 
     const output = consoleOutput.join("\n");
     expect(output).toContain("Could not open browser");

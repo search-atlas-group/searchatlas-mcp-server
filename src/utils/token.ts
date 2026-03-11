@@ -1,8 +1,13 @@
 /**
  * Token sanitization and JWT validation utilities.
  *
+ * IMPORTANT: These functions are CLIENT-SIDE UX helpers only, NOT security controls.
+ * The JWT signature is NOT verified here — the backend performs full cryptographic
+ * validation on every request. These utilities exist solely to provide early feedback
+ * (e.g. "your token is expired") before making a network round-trip.
+ *
  * - sanitizeToken()  — strips quotes, trims whitespace, rejects garbage
- * - validateToken()  — structural JWT check + expiry inspection
+ * - validateToken()  — structural JWT check + expiry inspection (no signature verification)
  */
 
 export interface TokenValidationResult {
@@ -65,9 +70,10 @@ export function validateToken(raw: string | undefined | null): TokenValidationRe
 
     const result: TokenValidationResult = { valid: true, token };
 
-    // Extract user ID if present
-    if (typeof payload.user_id === "string" || typeof payload.user_id === "number") {
-      result.userId = String(payload.user_id);
+    // Extract user ID if present (prefer user_id, fallback to sub)
+    const rawId = payload.user_id ?? payload.sub;
+    if (typeof rawId === "string" || typeof rawId === "number") {
+      result.userId = String(rawId);
     }
 
     // Check expiry

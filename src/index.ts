@@ -11,7 +11,9 @@
  *   --version / -v     Print version
  */
 
-const VERSION = "1.3.0";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { version: VERSION } = require("../package.json") as { version: string };
 
 const args = process.argv.slice(2);
 
@@ -48,13 +50,27 @@ if (args.includes("--version") || args.includes("-v")) {
 
 // login
 if (args.includes("login")) {
-  const { runLogin } = await import("./login.js");
-  await runLogin();
+  try {
+    const { runLogin } = await import("./login.js");
+    await runLogin();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg !== "process.exit") {
+      process.stderr.write(`\nLogin failed:\n\n${msg}\n\n`);
+      process.exit(1);
+    }
+  }
 }
 // check
 else if (args.includes("check")) {
-  const { runCheck } = await import("./check.js");
-  await runCheck();
+  try {
+    const { runCheck } = await import("./check.js");
+    await runCheck();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`\nHealth check failed:\n\n${msg}\n\n`);
+    process.exit(1);
+  }
 }
 // default: start MCP server
 else {

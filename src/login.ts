@@ -5,10 +5,10 @@
  */
 
 import { createInterface } from 'node:readline/promises';
-import { writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { exec, execSync } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { validateToken } from './utils/token.js';
 
 const RC_PATH = join(homedir(), '.searchatlasrc');
@@ -17,17 +17,19 @@ const LOGIN_URL = 'https://dashboard.searchatlas.com/login';
 function openBrowser(url: string): void {
   const cmd =
     process.platform === 'darwin'
-      ? `open "${url}"`
+      ? 'open'
       : process.platform === 'win32'
-        ? `start "${url}"`
-        : `xdg-open "${url}"`;
+        ? 'start'
+        : 'xdg-open';
 
-  exec(cmd, (err) => {
-    if (err) {
-      console.log(
-        `\nCould not open browser automatically. Please visit:\n  ${url}\n`,
-      );
-    }
+  const args = process.platform === 'win32' ? ['', url] : [url];
+
+  const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+  child.unref();
+  child.on('error', () => {
+    console.log(
+      `\nCould not open browser automatically. Please visit:\n  ${url}\n`,
+    );
   });
 }
 
@@ -92,7 +94,6 @@ function resolveGuiConfig(): { command: string; args: string[] } {
 function autoUpdateConfigs(token: string): string[] {
   const { command, args } = resolveGuiConfig();
   const updated: string[] = [];
-  const cwd = process.cwd();
   const home = homedir();
 
   // Standard mcpServers shape (Cursor, Claude Desktop, Windsurf)
@@ -106,40 +107,21 @@ function autoUpdateConfigs(token: string): string[] {
     },
   };
 
-  // VS Code uses "servers" instead of "mcpServers"
-  const vscodeConfig = {
-    servers: {
-      searchatlas: {
-        command,
-        args,
-        env: { SEARCHATLAS_TOKEN: token },
-      },
-    },
-  };
-
-  // All known MCP config file locations
+  // Global MCP config file locations only.
+  // Project-local configs (.cursor/mcp.json, .vscode/mcp.json) are intentionally
+  // excluded to prevent tokens from being committed to git repositories.
   const configFiles: Array<{
     path: string;
     label: string;
     template: Record<string, unknown>;
     tokenPath: string[];
-    global: boolean;
   }> = [
-    // Cursor — project-level
-    {
-      path: join(cwd, '.cursor', 'mcp.json'),
-      label: 'Cursor (project)',
-      template: mcpServersConfig,
-      tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
-      global: false,
-    },
     // Cursor — global
     {
       path: join(home, '.cursor', 'mcp.json'),
       label: 'Cursor (global)',
       template: mcpServersConfig,
       tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
-      global: true,
     },
     // Claude Desktop — macOS / Windows
     {
@@ -149,7 +131,6 @@ function autoUpdateConfigs(token: string): string[] {
       label: 'Claude Desktop',
       template: mcpServersConfig,
       tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
-      global: true,
     },
     // Windsurf
     {
@@ -157,15 +138,6 @@ function autoUpdateConfigs(token: string): string[] {
       label: 'Windsurf',
       template: mcpServersConfig,
       tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
-      global: true,
-    },
-    // VS Code — project-level
-    {
-      path: join(cwd, '.vscode', 'mcp.json'),
-      label: 'VS Code (project)',
-      template: vscodeConfig,
-      tokenPath: ['servers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
-      global: false,
     },
   ];
 
@@ -187,14 +159,18 @@ function autoUpdateConfigs(token: string): string[] {
           writeFileSync(config.path, JSON.stringify(existing, null, 2) + '\n');
           updated.push(`${config.label} (added)`);
         }
-      } else if (config.global) {
-        // Global config doesn't exist — create directory + file
-        mkdirSync(dirname(config.path), { recursive: true });
-        writeFileSync(config.path, JSON.stringify(config.template, null, 2) + '\n');
+        // Ensure token-bearing config files are owner-readable only
+        try { chmodSync(config.path, 0o600); } catch { /* best effort */ }
+      } else {
+        // Global config doesn't exist — create directory + file with secure permissions
+        mkdirSync(dirname(config.path), { recursive: true, mode: 0o700 });
+        writeFileSync(config.path, JSON.stringify(config.template, null, 2) + '\n', { mode: 0o600 });
         updated.push(`${config.label} (created)`);
       }
-    } catch {
-      // Skip files we can't read/parse/create — don't break the login flow
+    } catch (err) {
+      // Log failure to stderr so the user knows, but don't break the login flow
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`  Warning: Could not update ${config.label}: ${msg}\n`);
     }
   }
 
@@ -268,8 +244,15 @@ function indent(json: string): string {
     .join('\n');
 }
 
+/** Mask a token for display, showing only the last 4 characters. */
+function maskToken(token: string): string {
+  if (token.length <= 8) return '****';
+  return '****' + token.slice(-4);
+}
+
 function printConfigSnippets(token: string, updatedFiles: string[]): void {
   const { command, args } = resolveGuiConfig();
+  const masked = maskToken(token);
 
   // Show which files were auto-configured
   if (updatedFiles.length > 0) {
@@ -286,32 +269,39 @@ function printConfigSnippets(token: string, updatedFiles: string[]): void {
   const hasClaudeDesktop = joined.includes('Claude Desktop');
 
   // Claude Code — always manual (one-liner, no config file)
+  // Token is referenced as $SEARCHATLAS_TOKEN to avoid exposing it in shell history
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   console.log('  ── Claude Code ──────────────────────────────\n');
   console.log(
-    `  claude mcp add searchatlas -e SEARCHATLAS_TOKEN=${token} -- ${npxCmd} -y searchatlas-mcp-server\n`,
+    `  claude mcp add searchatlas -e SEARCHATLAS_TOKEN=$SEARCHATLAS_TOKEN -- ${npxCmd} -y searchatlas-mcp-server\n`,
+  );
+  console.log(
+    `  (Token saved to ~/.searchatlasrc — set the env var first:\n` +
+    `   export SEARCHATLAS_TOKEN=$(grep SEARCHATLAS_TOKEN ~/.searchatlasrc | cut -d= -f2))\n`,
   );
 
   if (!hasCursor) {
     console.log('  ── Cursor (~/.cursor/mcp.json) ──────────────\n');
     console.log(
       `${indent(JSON.stringify(
-        { mcpServers: { searchatlas: { command, args, env: { SEARCHATLAS_TOKEN: token } } } },
+        { mcpServers: { searchatlas: { command, args, env: { SEARCHATLAS_TOKEN: masked } } } },
         null,
         2,
       ))}\n`,
     );
+    console.log('  (Replace the masked token with your actual token from ~/.searchatlasrc)\n');
   }
 
   if (!hasClaudeDesktop) {
     console.log('  ── Claude Desktop ───────────────────────────\n');
     console.log(
       `${indent(JSON.stringify(
-        { mcpServers: { searchatlas: { command, args, env: { SEARCHATLAS_TOKEN: token } } } },
+        { mcpServers: { searchatlas: { command, args, env: { SEARCHATLAS_TOKEN: masked } } } },
         null,
         2,
       ))}\n`,
     );
+    console.log('  (Replace the masked token with your actual token from ~/.searchatlasrc)\n');
   }
 
   console.log('  ✦ Done! Restart your MCP client to pick up the new token.\n');
