@@ -9,6 +9,33 @@ import { getAuthHeaders } from "./auth.js";
 import { ApiError, AuthError } from "./errors.js";
 import { createSessionId, getUserId } from "./session.js";
 
+/** Default request timeout: 30 seconds. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/** SSE stream idle timeout: 5 minutes. */
+const SSE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Maximum SSE response buffer size: 10 MB. */
+const MAX_SSE_BUFFER_BYTES = 10 * 1024 * 1024;
+
+/** Maximum error body length forwarded to MCP clients. */
+const MAX_ERROR_BODY_LENGTH = 500;
+
+/**
+ * Truncate and sanitize an error response body before forwarding to MCP clients.
+ * Strips stack traces and internal details that may leak from backend debug pages.
+ */
+function sanitizeErrorBody(text: string): string {
+  if (!text) return text;
+  // Strip common stack trace patterns
+  let cleaned = text.replace(/Traceback \(most recent call last\)[\s\S]*/i, "[stack trace removed]");
+  cleaned = cleaned.replace(/at [\w./<>]+ \([\w/.:-]+\)/g, "[frame]");
+  if (cleaned.length > MAX_ERROR_BODY_LENGTH) {
+    cleaned = cleaned.slice(0, MAX_ERROR_BODY_LENGTH) + "… [truncated]";
+  }
+  return cleaned;
+}
+
 // ─── JSON requests ──────────────────────────────────────────────────────────
 
 export async function apiRequest<T>(
@@ -26,6 +53,7 @@ export async function apiRequest<T>(
   const res = await fetch(url.toString(), {
     method: options.method ?? "GET",
     headers: getAuthHeaders(config),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     ...(options.body !== undefined && { body: JSON.stringify(options.body) }),
   });
 
@@ -36,7 +64,7 @@ export async function apiRequest<T>(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new ApiError(
-      text || `${res.status} ${res.statusText}`,
+      sanitizeErrorBody(text) || `${res.status} ${res.statusText}`,
       res.status,
       res.statusText
     );
@@ -64,6 +92,7 @@ export async function streamAgentMessage(
   const res = await fetch(url, {
     method: "POST",
     headers: getAuthHeaders(config),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     body: JSON.stringify({
       ...body,
       stream: true,
@@ -79,7 +108,7 @@ export async function streamAgentMessage(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new ApiError(
-      text || `${res.status} ${res.statusText}`,
+      sanitizeErrorBody(text) || `${res.status} ${res.statusText}`,
       res.status,
       res.statusText
     );
@@ -98,6 +127,7 @@ async function collectSSEStream(body: ReadableStream<Uint8Array>): Promise<strin
   const decoder = new TextDecoder();
   let buffer = "";
   let result = "";
+  let resultBytes = 0;
 
   try {
     while (true) {
@@ -119,7 +149,15 @@ async function collectSSEStream(body: ReadableStream<Uint8Array>): Promise<strin
         }
 
         if (typeof chunk.content === "string") {
+          const chunkBytes = Buffer.byteLength(chunk.content, "utf-8");
+          if (resultBytes + chunkBytes > MAX_SSE_BUFFER_BYTES) {
+            throw new ApiError(
+              `Response exceeded maximum size (${MAX_SSE_BUFFER_BYTES / 1024 / 1024}MB)`,
+              500
+            );
+          }
           result += chunk.content;
+          resultBytes += chunkBytes;
         }
 
         if (chunk.is_complete) {

@@ -57,21 +57,38 @@ describe("loadConfig", () => {
 
   it("loads custom API URL from env", () => {
     process.env.SEARCHATLAS_TOKEN = createTestJWT();
-    process.env.SEARCHATLAS_API_URL = "https://custom.api.com/";
+    process.env.SEARCHATLAS_API_URL = "https://staging.searchatlas.com/";
     mockedReadFileSync.mockImplementation(() => { throw new Error("no file"); });
 
     const config = loadConfig();
-    expect(config.apiUrl).toBe("https://custom.api.com"); // trailing slash stripped
+    expect(config.apiUrl).toBe("https://staging.searchatlas.com"); // trailing slash stripped
   });
 
   it("loads custom API URL from rc file", () => {
     const token = createTestJWT();
     mockedReadFileSync.mockReturnValue(
-      `SEARCHATLAS_TOKEN=${token}\nSEARCHATLAS_API_URL=https://rc-api.com\n`
+      `SEARCHATLAS_TOKEN=${token}\nSEARCHATLAS_API_URL=https://api.searchatlas.com\n`
     );
 
     const config = loadConfig();
-    expect(config.apiUrl).toBe("https://rc-api.com");
+    expect(config.apiUrl).toBe("https://api.searchatlas.com");
+  });
+
+  it("rejects non-searchatlas API URLs", () => {
+    process.env.SEARCHATLAS_TOKEN = createTestJWT();
+    process.env.SEARCHATLAS_API_URL = "https://evil.example.com/";
+    mockedReadFileSync.mockImplementation(() => { throw new Error("no file"); });
+
+    expect(() => loadConfig()).toThrow("must point to *.searchatlas.com");
+  });
+
+  it("allows localhost API URL for development", () => {
+    process.env.SEARCHATLAS_TOKEN = createTestJWT();
+    process.env.SEARCHATLAS_API_URL = "http://localhost:8000";
+    mockedReadFileSync.mockImplementation(() => { throw new Error("no file"); });
+
+    const config = loadConfig();
+    expect(config.apiUrl).toBe("http://localhost:8000");
   });
 
   it("throws when no credentials found", () => {

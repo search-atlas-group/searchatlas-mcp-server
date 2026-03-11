@@ -43,11 +43,50 @@ function loadRcFile(): Record<string, string> {
   }
 }
 
+const DEFAULT_API_URL = "https://mcp.searchatlas.com";
+
+/**
+ * Validate that an API URL is allowed.
+ * Only *.searchatlas.com origins are permitted to prevent credential exfiltration.
+ */
+function validateApiUrl(raw: string): string {
+  const cleaned = raw.replace(/\/+$/, "").trim();
+  // Strip surrounding quotes (common in .env / rc files)
+  const unquoted = (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+                   (cleaned.startsWith("'") && cleaned.endsWith("'"))
+    ? cleaned.slice(1, -1).trim()
+    : cleaned;
+
+  try {
+    const parsed = new URL(unquoted);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error(`Invalid API URL protocol: ${parsed.protocol}`);
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (host === "searchatlas.com" || host.endsWith(".searchatlas.com")) {
+      return unquoted.replace(/\/+$/, "");
+    }
+    // Allow localhost for development
+    if (host === "localhost" || host === "127.0.0.1") {
+      return unquoted.replace(/\/+$/, "");
+    }
+  } catch (e) {
+    if (e instanceof TypeError) {
+      throw new Error(`Invalid SEARCHATLAS_API_URL: ${unquoted}`);
+    }
+    throw e;
+  }
+  throw new Error(
+    `SEARCHATLAS_API_URL must point to *.searchatlas.com. Got: ${unquoted}`
+  );
+}
+
 export function loadConfig(): Config {
   const rc = loadRcFile();
 
-  const apiUrl =
-    process.env.SEARCHATLAS_API_URL ?? rc.SEARCHATLAS_API_URL ?? "https://mcp.searchatlas.com";
+  const rawApiUrl =
+    process.env.SEARCHATLAS_API_URL ?? rc.SEARCHATLAS_API_URL ?? DEFAULT_API_URL;
+  const apiUrl = validateApiUrl(rawApiUrl);
 
   // Sanitize tokens — strips quotes, trims whitespace, rejects garbage
   const token = sanitizeToken(process.env.SEARCHATLAS_TOKEN ?? rc.SEARCHATLAS_TOKEN) ?? undefined;
@@ -64,5 +103,5 @@ export function loadConfig(): Config {
     );
   }
 
-  return { apiUrl: apiUrl.replace(/\/+$/, ""), apiKey, token };
+  return { apiUrl, apiKey, token };
 }
