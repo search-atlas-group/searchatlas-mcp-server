@@ -63,6 +63,10 @@ function validateApiUrl(raw: string): string {
       throw new Error(`Invalid API URL protocol: ${parsed.protocol}`);
     }
     const host = parsed.hostname.toLowerCase();
+    // Reject non-ASCII hostnames (prevents unicode/IDN homograph attacks)
+    if (!/^[\x20-\x7e]+$/.test(host)) {
+      throw new Error(`SEARCHATLAS_API_URL contains non-ASCII characters: ${host}`);
+    }
     if (host === "searchatlas.com" || host.endsWith(".searchatlas.com")) {
       return unquoted.replace(/\/+$/, "");
     }

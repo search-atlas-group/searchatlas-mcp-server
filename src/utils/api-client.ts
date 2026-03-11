@@ -145,7 +145,7 @@ async function collectSSEStream(body: ReadableStream<Uint8Array>): Promise<strin
         if (!chunk) continue;
 
         if (chunk.error) {
-          throw new ApiError(chunk.error, 500);
+          throw new ApiError(sanitizeErrorBody(chunk.error), 500);
         }
 
         if (typeof chunk.content === "string") {

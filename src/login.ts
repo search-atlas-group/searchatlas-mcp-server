@@ -163,7 +163,7 @@ function autoUpdateConfigs(token: string): string[] {
         try { chmodSync(config.path, 0o600); } catch { /* best effort */ }
       } else {
         // Global config doesn't exist — create directory + file with secure permissions
-        mkdirSync(dirname(config.path), { recursive: true });
+        mkdirSync(dirname(config.path), { recursive: true, mode: 0o700 });
         writeFileSync(config.path, JSON.stringify(config.template, null, 2) + '\n', { mode: 0o600 });
         updated.push(`${config.label} (created)`);
       }
