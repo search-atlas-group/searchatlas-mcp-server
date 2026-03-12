@@ -50,7 +50,13 @@ export function registerProjectTools(server: McpServer, config: Config): void {
     "searchatlas_create_project",
     "Create a new SearchAtlas project",
     {
-      domain: z.string().regex(/^[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)*\.[a-z]{2,}$/i, "Must be a valid domain (e.g. example.com)").describe("Project domain (e.g. example.com)"),
+      domain: z.string()
+        .max(253, "Domain must be 253 characters or fewer")
+        .regex(
+          /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,63}$/i,
+          "Must be a valid domain (e.g. example.com) — no leading/trailing hyphens, max 63 chars per label"
+        )
+        .describe("Project domain (e.g. example.com)"),
       country_code: z
         .string()
         .optional()

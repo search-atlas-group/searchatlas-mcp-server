@@ -7,13 +7,17 @@ vi.mock("node:fs", async () => {
   return {
     ...actual,
     readFileSync: vi.fn(),
+    statSync: vi.fn(),
+    chmodSync: vi.fn(),
   };
 });
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync, chmodSync } from "node:fs";
 import { loadConfig } from "../config.js";
 
 const mockedReadFileSync = vi.mocked(readFileSync);
+const mockedStatSync = vi.mocked(statSync);
+const mockedChmodSync = vi.mocked(chmodSync);
 
 describe("loadConfig", () => {
   const originalEnv = { ...process.env };
@@ -132,6 +136,34 @@ describe("loadConfig", () => {
     mockedReadFileSync.mockReturnValue("SEARCHATLAS_TOKEN=null\n");
 
     expect(() => loadConfig()).toThrow("No SearchAtlas credentials found");
+  });
+
+  it("auto-fixes insecure rc file permissions", () => {
+    const token = createTestJWT();
+    mockedStatSync.mockReturnValue({ mode: 0o100644 } as ReturnType<typeof statSync>);
+    mockedReadFileSync.mockReturnValue(`SEARCHATLAS_TOKEN=${token}\n`);
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    loadConfig();
+
+    expect(mockedChmodSync).toHaveBeenCalledWith(expect.stringContaining(".searchatlasrc"), 0o600);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("Fixed"));
+    stderrSpy.mockRestore();
+  });
+
+  it("warns but does not crash when chmod fails", () => {
+    const token = createTestJWT();
+    mockedStatSync.mockReturnValue({ mode: 0o100644 } as ReturnType<typeof statSync>);
+    mockedChmodSync.mockImplementation(() => { throw new Error("permission denied"); });
+    mockedReadFileSync.mockReturnValue(`SEARCHATLAS_TOKEN=${token}\n`);
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const config = loadConfig();
+    expect(config.token).toBe(token);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("Could not auto-fix"));
+    stderrSpy.mockRestore();
   });
 
   it("handles rc file with spaces around equals", () => {

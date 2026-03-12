@@ -10,7 +10,7 @@
  *   2. ~/.searchatlasrc file (one-time setup)
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { sanitizeToken } from "./utils/token.js";
@@ -26,14 +26,22 @@ function loadRcFile(): Record<string, string> {
   try {
     const rcPath = join(homedir(), ".searchatlasrc");
 
-    // Warn if rc file is readable by group or others (token exposure risk on shared filesystems)
+    // Auto-fix insecure permissions on rc file (token exposure risk on shared filesystems).
+    // Enforce 0o600 rather than just warning — the file contains credentials.
     try {
       const st = statSync(rcPath);
       if (typeof st.mode === "number" && (st.mode & 0o077) !== 0) {
-        process.stderr.write(
-          `  Warning: ${rcPath} is accessible by other users (mode ${(st.mode & 0o777).toString(8)}).\n` +
-          `  Run: chmod 600 ${rcPath}\n`
-        );
+        try {
+          chmodSync(rcPath, 0o600);
+          process.stderr.write(
+            `  Fixed: ${rcPath} permissions set to 600 (was ${(st.mode & 0o777).toString(8)}).\n`
+          );
+        } catch {
+          process.stderr.write(
+            `  Warning: ${rcPath} is accessible by other users (mode ${(st.mode & 0o777).toString(8)}).\n` +
+            `  Could not auto-fix. Run: chmod 600 ${rcPath}\n`
+          );
+        }
       }
     } catch { /* statSync may fail if file doesn't exist yet — loadRcFile handles that */ }
 

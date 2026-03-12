@@ -9,25 +9,50 @@ import { getAuthHeaders } from "./auth.js";
 import { ApiError, AuthError } from "./errors.js";
 import { createSessionId, getUserId } from "./session.js";
 
-// ─── Concurrency limiter ─────────────────────────────────────────────────────
+// ─── Concurrency limiter (semaphore) ─────────────────────────────────────────
 
 /** Maximum concurrent in-flight API/SSE requests per process. */
 const MAX_CONCURRENT_REQUESTS = 5;
 
-let _inFlight = 0;
-const _queue: Array<() => void> = [];
+/**
+ * Semaphore-based concurrency limiter. Uses an acquire/release pattern
+ * so the count is always consistent — no non-atomic read-then-write race.
+ */
+class Semaphore {
+  private _available: number;
+  private readonly _queue: Array<() => void> = [];
+
+  constructor(permits: number) {
+    this._available = permits;
+  }
+
+  async acquire(): Promise<void> {
+    if (this._available > 0) {
+      this._available--;
+      return;
+    }
+    await new Promise<void>((resolve) => this._queue.push(resolve));
+  }
+
+  release(): void {
+    const next = this._queue.shift();
+    if (next) {
+      // Hand the permit directly to the next waiter (no increment needed)
+      next();
+    } else {
+      this._available++;
+    }
+  }
+}
+
+const _semaphore = new Semaphore(MAX_CONCURRENT_REQUESTS);
 
 async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
-  if (_inFlight >= MAX_CONCURRENT_REQUESTS) {
-    await new Promise<void>((resolve) => _queue.push(resolve));
-  }
-  _inFlight++;
+  await _semaphore.acquire();
   try {
     return await fn();
   } finally {
-    _inFlight--;
-    const next = _queue.shift();
-    if (next) next();
+    _semaphore.release();
   }
 }
 
@@ -40,20 +65,41 @@ const SSE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 /** Maximum SSE response buffer size: 10 MB. */
 const MAX_SSE_BUFFER_BYTES = 10 * 1024 * 1024;
 
+/** Maximum number of SSE messages per stream (prevents flood of tiny messages). */
+const MAX_SSE_MESSAGES = 50_000;
+
 /** Maximum error body length forwarded to MCP clients. */
 const MAX_ERROR_BODY_LENGTH = 500;
 
 /**
  * Truncate and sanitize an error response body before forwarding to MCP clients.
- * Strips stack traces and internal details that may leak from backend debug pages.
+ * Strips stack traces, internal paths, and sensitive details that may leak from
+ * backend debug/error pages. Returns a generic message if nothing useful remains.
  */
 function sanitizeErrorBody(text: string): string {
   if (!text) return text;
-  // Strip common stack trace patterns
-  let cleaned = text.replace(/Traceback \(most recent call last\)[\s\S]*/i, "[stack trace removed]");
-  cleaned = cleaned.replace(/at [\w./<>]+ \([\w/.:-]+\)/g, "[frame]");
+  let cleaned = text;
+  // Strip Python tracebacks
+  cleaned = cleaned.replace(/Traceback \(most recent call last\)[\s\S]*/i, "[internal error]");
+  // Strip Node/JS stack frames
+  cleaned = cleaned.replace(/at [\w./<>]+ \([\w/.:-]+\)/g, "");
+  // Strip Java-style stack traces
+  cleaned = cleaned.replace(/^\s*at\s+[\w$.]+\([\w.:]+\)\s*$/gm, "");
+  // Strip file paths (Unix + Windows)
+  cleaned = cleaned.replace(/(?:\/[\w.\-]+){2,}/g, "[path]");
+  cleaned = cleaned.replace(/[A-Z]:\\[\w.\-\\]+/g, "[path]");
+  // Strip IP addresses
+  cleaned = cleaned.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?\b/g, "[addr]");
+  // Strip environment variable values that may leak
+  cleaned = cleaned.replace(/(?:password|secret|token|key|auth)\s*[:=]\s*\S+/gi, "[redacted]");
+  // Collapse excessive whitespace from removals
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
   if (cleaned.length > MAX_ERROR_BODY_LENGTH) {
     cleaned = cleaned.slice(0, MAX_ERROR_BODY_LENGTH) + "… [truncated]";
+  }
+  // If stripping left nothing useful, return a generic message
+  if (!cleaned || cleaned.length < 5) {
+    return "An internal error occurred.";
   }
   return cleaned;
 }
@@ -167,11 +213,24 @@ async function collectSSEStream(body: ReadableStream<Uint8Array>): Promise<strin
   let bufferBytes = 0;
   let result = "";
   let resultBytes = 0;
+  let messageCount = 0;
   let lastChunkTime = Date.now();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Cancel the reader and clean up resources before throwing or returning. */
+  async function cleanup(): Promise<void> {
+    if (idleTimer !== null) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    try {
+      await reader.cancel();
+    } catch { /* best effort */ }
+    reader.releaseLock();
+  }
 
   try {
     while (true) {
-      // Enforce idle timeout — abort if no data received within the limit
       const elapsed = Date.now() - lastChunkTime;
       if (elapsed > SSE_IDLE_TIMEOUT_MS) {
         throw new ApiError(
@@ -180,15 +239,24 @@ async function collectSSEStream(body: ReadableStream<Uint8Array>): Promise<strin
         );
       }
 
+      // Create a timeout that we can cancel when data arrives
+      const timeoutMs = SSE_IDLE_TIMEOUT_MS - elapsed;
       const { done, value } = await Promise.race([
         reader.read(),
-        new Promise<never>((_, reject) =>
-          setTimeout(
+        new Promise<never>((_, reject) => {
+          idleTimer = setTimeout(
             () => reject(new ApiError(`SSE stream idle timeout (${SSE_IDLE_TIMEOUT_MS / 1000}s without data)`, 504)),
-            SSE_IDLE_TIMEOUT_MS - elapsed
-          )
-        ),
+            timeoutMs
+          );
+        }),
       ]);
+
+      // Data received — clear the idle timer
+      if (idleTimer !== null) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+
       if (done) break;
 
       lastChunkTime = Date.now();
@@ -215,6 +283,14 @@ async function collectSSEStream(body: ReadableStream<Uint8Array>): Promise<strin
         const chunk = parseSSEChunk(msg);
         if (!chunk) continue;
 
+        messageCount++;
+        if (messageCount > MAX_SSE_MESSAGES) {
+          throw new ApiError(
+            `SSE stream exceeded maximum message count (${MAX_SSE_MESSAGES})`,
+            500
+          );
+        }
+
         if (chunk.error) {
           throw new ApiError(sanitizeErrorBody(chunk.error), 500);
         }
@@ -232,14 +308,17 @@ async function collectSSEStream(body: ReadableStream<Uint8Array>): Promise<strin
         }
 
         if (chunk.is_complete) {
+          await cleanup();
           return result;
         }
       }
     }
-  } finally {
-    reader.releaseLock();
+  } catch (err) {
+    await cleanup();
+    throw err;
   }
 
+  await cleanup();
   return result;
 }
 
