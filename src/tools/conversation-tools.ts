@@ -18,7 +18,7 @@ export function registerConversationTools(server: McpServer, config: Config): vo
         .optional()
         .describe("Filter by agent namespace (e.g. orchestrator, otto, content_genius)"),
       page: z.number().optional().default(1).describe("Page number"),
-      page_size: z.number().optional().default(20).describe("Results per page"),
+      page_size: z.number().int().min(1).max(100).optional().default(20).describe("Results per page (max 100)"),
       search: z.string().optional().describe("Search conversations by title"),
     },
     async ({ agent_namespace, page, page_size, search }) => {

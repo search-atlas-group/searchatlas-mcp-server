@@ -31,7 +31,7 @@ export function registerPlaybookTools(server: McpServer, config: Config): void {
         .optional()
         .describe('Search playbooks by name or description'),
       page: z.number().optional().default(1).describe('Page number'),
-      page_size: z.number().optional().default(20).describe('Results per page'),
+      page_size: z.number().int().min(1).max(100).optional().default(20).describe('Results per page (max 100)'),
     },
     async ({ filter, agent_namespace, search, page, page_size }) => {
       try {
@@ -68,7 +68,7 @@ export function registerPlaybookTools(server: McpServer, config: Config): void {
     'Execute a playbook (automation recipe) on a project using the appropriate agent',
     {
       playbook_id: z.string().describe('UUID of the playbook to run'),
-      project_id: z.number().describe('Project ID to run the playbook against'),
+      project_id: z.number().int().positive().describe('Project ID to run the playbook against'),
       message: z
         .string()
         .optional()

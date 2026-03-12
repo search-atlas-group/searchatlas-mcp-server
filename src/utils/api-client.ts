@@ -9,6 +9,28 @@ import { getAuthHeaders } from "./auth.js";
 import { ApiError, AuthError } from "./errors.js";
 import { createSessionId, getUserId } from "./session.js";
 
+// ─── Concurrency limiter ─────────────────────────────────────────────────────
+
+/** Maximum concurrent in-flight API/SSE requests per process. */
+const MAX_CONCURRENT_REQUESTS = 5;
+
+let _inFlight = 0;
+const _queue: Array<() => void> = [];
+
+async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
+  if (_inFlight >= MAX_CONCURRENT_REQUESTS) {
+    await new Promise<void>((resolve) => _queue.push(resolve));
+  }
+  _inFlight++;
+  try {
+    return await fn();
+  } finally {
+    _inFlight--;
+    const next = _queue.shift();
+    if (next) next();
+  }
+}
+
 /** Default request timeout: 30 seconds. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -39,6 +61,14 @@ function sanitizeErrorBody(text: string): string {
 // ─── JSON requests ──────────────────────────────────────────────────────────
 
 export async function apiRequest<T>(
+  config: Config,
+  path: string,
+  options: { method?: string; body?: unknown; params?: Record<string, string> } = {}
+): Promise<T> {
+  return withConcurrencyLimit(() => _apiRequest(config, path, options));
+}
+
+async function _apiRequest<T>(
   config: Config,
   path: string,
   options: { method?: string; body?: unknown; params?: Record<string, string> } = {}
@@ -87,6 +117,14 @@ export async function streamAgentMessage(
   endpoint: string,
   body: Record<string, unknown>
 ): Promise<string> {
+  return withConcurrencyLimit(() => _streamAgentMessage(config, endpoint, body));
+}
+
+async function _streamAgentMessage(
+  config: Config,
+  endpoint: string,
+  body: Record<string, unknown>
+): Promise<string> {
   const url = `${config.apiUrl}${endpoint}`;
 
   const res = await fetch(url, {
@@ -126,21 +164,54 @@ async function collectSSEStream(body: ReadableStream<Uint8Array>): Promise<strin
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let bufferBytes = 0;
   let result = "";
   let resultBytes = 0;
+  let lastChunkTime = Date.now();
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      // Enforce idle timeout — abort if no data received within the limit
+      const elapsed = Date.now() - lastChunkTime;
+      if (elapsed > SSE_IDLE_TIMEOUT_MS) {
+        throw new ApiError(
+          `SSE stream idle timeout (${SSE_IDLE_TIMEOUT_MS / 1000}s without data)`,
+          504
+        );
+      }
+
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new ApiError(`SSE stream idle timeout (${SSE_IDLE_TIMEOUT_MS / 1000}s without data)`, 504)),
+            SSE_IDLE_TIMEOUT_MS - elapsed
+          )
+        ),
+      ]);
       if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
+      lastChunkTime = Date.now();
 
-      // Process complete SSE messages (delimited by double newline)
-      const messages = buffer.split("\n\n");
-      buffer = messages.pop() ?? "";
+      const decoded = decoder.decode(value, { stream: true });
+      buffer += decoded;
+      bufferBytes += Buffer.byteLength(decoded, "utf-8");
 
-      for (const msg of messages) {
+      // Guard the pre-parse buffer against unbounded growth (no \n\n delimiter)
+      if (bufferBytes > MAX_SSE_BUFFER_BYTES) {
+        throw new ApiError(
+          `SSE pre-parse buffer exceeded maximum size (${MAX_SSE_BUFFER_BYTES / 1024 / 1024}MB)`,
+          500
+        );
+      }
+
+      // Process complete SSE messages iteratively (avoids split() array explosion on malicious streams)
+      let delimIdx: number;
+      while ((delimIdx = buffer.indexOf("\n\n")) !== -1) {
+        const msg = buffer.slice(0, delimIdx);
+        buffer = buffer.slice(delimIdx + 2);
+        bufferBytes = Buffer.byteLength(buffer, "utf-8");
+
         const chunk = parseSSEChunk(msg);
         if (!chunk) continue;
 

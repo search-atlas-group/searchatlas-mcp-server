@@ -82,13 +82,23 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow("must point to *.searchatlas.com");
   });
 
-  it("allows localhost API URL for development", () => {
+  it("allows localhost API URL when SEARCHATLAS_DEV_MODE=1", () => {
     process.env.SEARCHATLAS_TOKEN = createTestJWT();
     process.env.SEARCHATLAS_API_URL = "http://localhost:8000";
+    process.env.SEARCHATLAS_DEV_MODE = "1";
     mockedReadFileSync.mockImplementation(() => { throw new Error("no file"); });
 
     const config = loadConfig();
     expect(config.apiUrl).toBe("http://localhost:8000");
+  });
+
+  it("rejects localhost API URL without SEARCHATLAS_DEV_MODE", () => {
+    process.env.SEARCHATLAS_TOKEN = createTestJWT();
+    process.env.SEARCHATLAS_API_URL = "http://localhost:8000";
+    delete process.env.SEARCHATLAS_DEV_MODE;
+    mockedReadFileSync.mockImplementation(() => { throw new Error("no file"); });
+
+    expect(() => loadConfig()).toThrow("SEARCHATLAS_DEV_MODE=1");
   });
 
   it("throws when no credentials found", () => {
