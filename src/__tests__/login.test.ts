@@ -18,7 +18,7 @@ vi.mock("node:child_process", async () => {
   return {
     ...actual,
     spawn: vi.fn(),
-    execSync: vi.fn(),
+    execFileSync: vi.fn(),
   };
 });
 
@@ -27,7 +27,7 @@ vi.mock("node:readline/promises", () => ({
 }));
 
 import { writeFileSync, existsSync, readFileSync } from "node:fs";
-import { spawn, execSync } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { EventEmitter } from "node:events";
 import { runLogin } from "../login.js";
@@ -36,7 +36,7 @@ const mockedWriteFileSync = vi.mocked(writeFileSync);
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedReadFileSync = vi.mocked(readFileSync);
 const mockedSpawn = vi.mocked(spawn);
-const mockedExecSync = vi.mocked(execSync);
+const mockedExecFileSync = vi.mocked(execFileSync);
 const mockedCreateInterface = vi.mocked(createInterface);
 
 describe("runLogin", () => {
@@ -55,10 +55,9 @@ describe("runLogin", () => {
       consoleErrors.push(args.join(" "));
     });
 
-    // Default mock: node and npm found
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (cmd === "which node") return "/usr/local/bin/node";
-      if (cmd === "npm root -g") return "/usr/local/lib/node_modules";
+    // Default mock: npm root -g found via execFileSync
+    mockedExecFileSync.mockImplementation((_cmd: string, args?: readonly string[]) => {
+      if (args && args[0] === "root" && args[1] === "-g") return "/usr/local/lib/node_modules";
       return "";
     });
 
@@ -321,7 +320,7 @@ describe("runLogin", () => {
     expect(String(writeCall[1])).toContain(`SEARCHATLAS_TOKEN=${token}`);
   });
 
-  it("falls back to 'node' when which node fails", async () => {
+  it("uses process.execPath for node path (no shell lookup)", async () => {
     const token = createTestJWT();
     const mockRl = {
       question: vi.fn().mockResolvedValue(token),
@@ -329,16 +328,11 @@ describe("runLogin", () => {
     };
     mockedCreateInterface.mockReturnValue(mockRl as unknown as ReturnType<typeof createInterface>);
 
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (cmd === "which node") throw new Error("not found");
-      if (cmd === "npm root -g") return "/usr/local/lib/node_modules";
-      return "";
-    });
-
     await runLogin();
 
     const output = consoleOutput.join("\n");
     expect(output).toContain("Token saved");
+    // Should never call execFileSync for node resolution — only for npm root -g
   });
 
   it("uses npx when npm root -g fails", async () => {
@@ -349,10 +343,8 @@ describe("runLogin", () => {
     };
     mockedCreateInterface.mockReturnValue(mockRl as unknown as ReturnType<typeof createInterface>);
 
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (cmd === "which node") return "/usr/local/bin/node";
-      if (cmd === "npm root -g") throw new Error("not found");
-      return "";
+    mockedExecFileSync.mockImplementation(() => {
+      throw new Error("not found");
     });
 
     await runLogin();

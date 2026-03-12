@@ -8,11 +8,11 @@ import { createInterface } from 'node:readline/promises';
 import { writeFileSync, existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { validateToken } from './utils/token.js';
 
-/** Reject paths containing shell metacharacters or non-printable chars. */
-const SAFE_PATH_RE = /^[a-zA-Z0-9/_.\-\\: ]+$/;
+/** Reject paths containing shell metacharacters or non-printable chars. Spaces disallowed to prevent shell splitting. */
+const SAFE_PATH_RE = /^[a-zA-Z0-9/_.\-\\:]+$/;
 
 const RC_PATH = join(homedir(), '.searchatlasrc');
 const LOGIN_URL = 'https://dashboard.searchatlas.com/login';
@@ -50,26 +50,23 @@ function validateResolvedPath(p: string): string | null {
 }
 
 function resolveNodePath(): string {
-  // Prefer the current process's own Node binary — avoids PATH manipulation attacks
+  // Use the current process's own Node binary — avoids PATH manipulation attacks entirely.
+  // Never fall back to which/where (shell-based PATH lookup).
   const execPath = process.execPath;
   if (execPath && isAbsolute(execPath) && SAFE_PATH_RE.test(execPath)) {
     return execPath;
   }
-
-  try {
-    const cmd = process.platform === 'win32' ? 'where node' : 'which node';
-    const result = execSync(cmd, { encoding: 'utf-8' }).trim();
-    // `where` on Windows may return multiple lines — take the first
-    const first = result.split('\n')[0].trim();
-    return validateResolvedPath(first) ?? 'node';
-  } catch {
-    return 'node';
-  }
+  return 'node';
 }
 
 function resolveGlobalRoot(): string | null {
   try {
-    const raw = execSync('npm root -g', { encoding: 'utf-8' }).trim();
+    // Use execFileSync with explicit args to avoid shell injection.
+    // execFileSync does NOT invoke a shell — the command and args are passed directly.
+    const raw = execFileSync('npm', ['root', '-g'], {
+      encoding: 'utf-8',
+      timeout: 5_000,
+    }).trim();
     if (!raw || !isAbsolute(raw) || !SAFE_PATH_RE.test(raw)) return null;
     return raw;
   } catch {
@@ -161,14 +158,10 @@ function autoUpdateConfigs(token: string): string[] {
     // Claude Desktop — macOS / Windows
     // On Windows, only trust APPDATA if it's under the user's home directory
     {
+      // Always use a fixed path under the user's home dir — never trust APPDATA env var
+      // which could be manipulated to point to an attacker-controlled directory.
       path: process.platform === 'win32'
-        ? join(
-            (() => {
-              const appData = process.env.APPDATA;
-              if (appData && isAbsolute(appData) && appData.startsWith(home)) return appData;
-              return join(home, 'AppData', 'Roaming');
-            })(),
-            'Claude', 'claude_desktop_config.json')
+        ? join(home, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json')
         : join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
       label: 'Claude Desktop',
       template: mcpServersConfig,
@@ -212,7 +205,7 @@ function autoUpdateConfigs(token: string): string[] {
     } catch (err) {
       // Log failure to stderr so the user knows, but don't break the login flow
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`  Warning: Could not update ${config.label}: ${msg}\n`);
+      process.stderr.write(`  Warning: Could not update ${config.label} (${config.path}): ${msg}\n`);
     }
   }
 
