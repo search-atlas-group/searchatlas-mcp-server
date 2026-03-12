@@ -20,7 +20,7 @@ describe("getUserId", () => {
     const payload = Buffer.from(JSON.stringify({ sub: "user-sub" })).toString("base64url");
     const token = `${header}.${payload}.sig`;
     const userId = getUserId({ apiUrl: "https://example.com", token });
-    expect(userId).toBe("user_sub"); // non-word chars replaced with _
+    expect(userId).toBe("user-sub"); // hyphens preserved, other non-word chars replaced with _
   });
 
   it("sanitizes non-word characters", () => {

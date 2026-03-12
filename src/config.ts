@@ -10,7 +10,7 @@
  *   2. ~/.searchatlasrc file (one-time setup)
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { sanitizeToken } from "./utils/token.js";
@@ -25,6 +25,18 @@ export interface Config {
 function loadRcFile(): Record<string, string> {
   try {
     const rcPath = join(homedir(), ".searchatlasrc");
+
+    // Warn if rc file is readable by group or others (token exposure risk on shared filesystems)
+    try {
+      const st = statSync(rcPath);
+      if (typeof st.mode === "number" && (st.mode & 0o077) !== 0) {
+        process.stderr.write(
+          `  Warning: ${rcPath} is accessible by other users (mode ${(st.mode & 0o777).toString(8)}).\n` +
+          `  Run: chmod 600 ${rcPath}\n`
+        );
+      }
+    } catch { /* statSync may fail if file doesn't exist yet — loadRcFile handles that */ }
+
     const content = readFileSync(rcPath, "utf-8");
     const vars: Record<string, string> = {};
     for (const line of content.split("\n")) {
@@ -70,9 +82,14 @@ function validateApiUrl(raw: string): string {
     if (host === "searchatlas.com" || host.endsWith(".searchatlas.com")) {
       return unquoted.replace(/\/+$/, "");
     }
-    // Allow localhost for development
+    // Allow localhost only when explicitly opted in via SEARCHATLAS_DEV_MODE
     if (host === "localhost" || host === "127.0.0.1") {
-      return unquoted.replace(/\/+$/, "");
+      if (process.env.SEARCHATLAS_DEV_MODE === "1") {
+        return unquoted.replace(/\/+$/, "");
+      }
+      throw new Error(
+        `Localhost API URLs require SEARCHATLAS_DEV_MODE=1. Got: ${unquoted}`
+      );
     }
   } catch (e) {
     if (e instanceof TypeError) {

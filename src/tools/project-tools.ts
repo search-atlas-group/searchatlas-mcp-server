@@ -15,7 +15,7 @@ export function registerProjectTools(server: McpServer, config: Config): void {
     "List SearchAtlas projects for the authenticated user",
     {
       page: z.number().optional().default(1).describe("Page number"),
-      page_size: z.number().optional().default(20).describe("Results per page"),
+      page_size: z.number().int().min(1).max(100).optional().default(20).describe("Results per page (max 100)"),
       search: z.string().optional().describe("Filter projects by domain"),
     },
     async ({ page, page_size, search }) => {
@@ -50,7 +50,7 @@ export function registerProjectTools(server: McpServer, config: Config): void {
     "searchatlas_create_project",
     "Create a new SearchAtlas project",
     {
-      domain: z.string().describe("Project domain (e.g. example.com)"),
+      domain: z.string().regex(/^[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)*\.[a-z]{2,}$/i, "Must be a valid domain (e.g. example.com)").describe("Project domain (e.g. example.com)"),
       country_code: z
         .string()
         .optional()

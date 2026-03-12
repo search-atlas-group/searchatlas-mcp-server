@@ -19,7 +19,7 @@ export function getUserId(config: Config): string {
   if (config.token) {
     const result = validateToken(config.token);
     if (result.userId) {
-      return String(result.userId).replace(/\W+/g, "_");
+      return String(result.userId).replace(/[^\w\-]/g, "_");
     }
   }
   return getMcpUserId();

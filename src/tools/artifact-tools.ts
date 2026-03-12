@@ -15,7 +15,7 @@ export function registerArtifactTools(server: McpServer, config: Config): void {
     "List artifacts (code, content, reports) across all sessions",
     {
       page: z.number().optional().default(1).describe("Page number"),
-      page_size: z.number().optional().default(20).describe("Results per page"),
+      page_size: z.number().int().min(1).max(100).optional().default(20).describe("Results per page (max 100)"),
       type: z
         .string()
         .optional()

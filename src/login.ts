@@ -6,10 +6,13 @@
 
 import { createInterface } from 'node:readline/promises';
 import { writeFileSync, existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn, execSync } from 'node:child_process';
 import { validateToken } from './utils/token.js';
+
+/** Reject paths containing shell metacharacters or non-printable chars. */
+const SAFE_PATH_RE = /^[a-zA-Z0-9/_.\-\\: ]+$/;
 
 const RC_PATH = join(homedir(), '.searchatlasrc');
 const LOGIN_URL = 'https://dashboard.searchatlas.com/login';
@@ -33,12 +36,32 @@ function openBrowser(url: string): void {
   });
 }
 
+/**
+ * Validate that a resolved path is safe to write into IDE config files.
+ * Must be absolute, exist on disk, and contain no shell metacharacters.
+ */
+function validateResolvedPath(p: string): string | null {
+  const trimmed = p.trim();
+  if (!trimmed) return null;
+  if (!isAbsolute(trimmed)) return null;
+  if (!SAFE_PATH_RE.test(trimmed)) return null;
+  if (!existsSync(trimmed)) return null;
+  return trimmed;
+}
+
 function resolveNodePath(): string {
+  // Prefer the current process's own Node binary — avoids PATH manipulation attacks
+  const execPath = process.execPath;
+  if (execPath && isAbsolute(execPath) && SAFE_PATH_RE.test(execPath)) {
+    return execPath;
+  }
+
   try {
     const cmd = process.platform === 'win32' ? 'where node' : 'which node';
     const result = execSync(cmd, { encoding: 'utf-8' }).trim();
     // `where` on Windows may return multiple lines — take the first
-    return result.split('\n')[0].trim();
+    const first = result.split('\n')[0].trim();
+    return validateResolvedPath(first) ?? 'node';
   } catch {
     return 'node';
   }
@@ -46,7 +69,9 @@ function resolveNodePath(): string {
 
 function resolveGlobalRoot(): string | null {
   try {
-    return execSync('npm root -g', { encoding: 'utf-8' }).trim();
+    const raw = execSync('npm root -g', { encoding: 'utf-8' }).trim();
+    if (!raw || !isAbsolute(raw) || !SAFE_PATH_RE.test(raw)) return null;
+    return raw;
   } catch {
     return null;
   }
@@ -82,8 +107,18 @@ function resolveGuiConfig(): { command: string; args: string[] } {
     return { command: nodePath, args: [entryPoint!] };
   }
 
-  const npxBin = process.platform === 'win32' ? 'npx.cmd' : `${dirname(nodePath)}/npx`;
-  return { command: npxBin, args: ['-y', 'searchatlas-mcp-server'] };
+  if (process.platform === 'win32') {
+    return { command: 'npx.cmd', args: ['-y', 'searchatlas-mcp-server'] };
+  }
+
+  // Validate dirname(nodePath) to prevent PATH injection into npx binary reference
+  const nodeDir = dirname(nodePath);
+  const npxCandidate = `${nodeDir}/npx`;
+  if (isAbsolute(nodeDir) && SAFE_PATH_RE.test(npxCandidate) && existsSync(npxCandidate)) {
+    return { command: npxCandidate, args: ['-y', 'searchatlas-mcp-server'] };
+  }
+
+  return { command: 'npx', args: ['-y', 'searchatlas-mcp-server'] };
 }
 
 /**
@@ -124,9 +159,16 @@ function autoUpdateConfigs(token: string): string[] {
       tokenPath: ['mcpServers', 'searchatlas', 'env', 'SEARCHATLAS_TOKEN'],
     },
     // Claude Desktop — macOS / Windows
+    // On Windows, only trust APPDATA if it's under the user's home directory
     {
       path: process.platform === 'win32'
-        ? join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json')
+        ? join(
+            (() => {
+              const appData = process.env.APPDATA;
+              if (appData && isAbsolute(appData) && appData.startsWith(home)) return appData;
+              return join(home, 'AppData', 'Roaming');
+            })(),
+            'Claude', 'claude_desktop_config.json')
         : join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
       label: 'Claude Desktop',
       template: mcpServersConfig,

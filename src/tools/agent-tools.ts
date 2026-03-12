@@ -14,6 +14,8 @@ const agentInputSchema = {
   message: z.string().describe("The message to send to the agent"),
   project_id: z
     .number()
+    .int()
+    .positive()
     .optional()
     .describe("Project ID to scope the request (recommended)"),
   playbook_id: z
