@@ -13,6 +13,10 @@ Works with **Claude Code, Cursor, Claude Desktop, VS Code, Windsurf, and Zed**.
 
 ---
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/searchatlas).
+
 ## Setup (3 steps)
 
 ### 1. Install & log in
