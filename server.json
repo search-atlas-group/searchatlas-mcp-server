@@ -2,17 +2,17 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.search-atlas-group/searchatlas",
   "title": "SearchAtlas",
-  "description": "SearchAtlas AI Agent — SEO, content, PPC, authority building, and site management",
+  "description": "SearchAtlas AI Agent (v2) — stdio bridge to the SearchAtlas Streamable-HTTP MCP server at https://mcp.searchatlas.com/mcp/. Exposes 500+ tools for OTTO SEO, PPC, content, site explorer, Google Business Profile, local SEO, digital PR, keyword research, LLM visibility, and more.",
   "repository": {
     "url": "https://github.com/Search-Atlas-Group/searchatlas-mcp-server",
     "source": "github"
   },
-  "version": "1.3.8",
+  "version": "1.4.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "searchatlas-mcp-server",
-      "version": "1.3.8",
+      "version": "1.4.0",
       "transport": {
         "type": "stdio"
       },
@@ -31,77 +31,99 @@
         },
         {
           "name": "SEARCHATLAS_API_URL",
-          "description": "API base URL (defaults to https://mcp.searchatlas.com)",
+          "description": "Base URL for the SearchAtlas v2 MCP endpoint (defaults to https://mcp.searchatlas.com/mcp)",
           "isRequired": false,
           "isSecret": false
         }
       ]
     }
   ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.searchatlas.com/mcp/"
+    }
+  ],
   "tools": [
     {
-      "name": "searchatlas_orchestrator",
-      "description": "Multi-agent coordinator — routes queries to the best specialized agent"
+      "name": "otto_list_projects",
+      "description": "List OTTO SEO projects — technical SEO automation, schema markup, on-page optimizations"
     },
     {
-      "name": "searchatlas_otto_seo",
-      "description": "On-page SEO automation — technical fixes, schema markup, optimizations"
+      "name": "ppc_list_accounts",
+      "description": "List Google Ads accounts — PPC campaigns, bids, performance"
     },
     {
-      "name": "searchatlas_ppc",
-      "description": "PPC / Google Ads management — campaigns, bids, performance"
+      "name": "cg_list_articles",
+      "description": "Content Genius — AI-generated articles, blog posts, landing pages"
     },
     {
-      "name": "searchatlas_content",
-      "description": "AI content generation — blog posts, landing pages, optimized copy"
+      "name": "se_list_sites",
+      "description": "Site Explorer — audit, crawl data, backlinks, competitive intelligence"
     },
     {
-      "name": "searchatlas_site_explorer",
-      "description": "Site audit and analysis — crawl data, backlinks, competitive intelligence"
+      "name": "gbp_get_business_categories",
+      "description": "Google Business Profile — listings, reviews, local SEO (96 tools)"
     },
     {
-      "name": "searchatlas_gbp",
-      "description": "Google Business Profile management — listings, reviews, local SEO"
+      "name": "local_seo_heatmaps_get_heatmap_details",
+      "description": "Local SEO heatmaps — geographic rank tracking across competitor locations"
     },
     {
-      "name": "searchatlas_authority_building",
-      "description": "Link building and digital PR — outreach, guest posts, authority signals"
+      "name": "ll_list_projects",
+      "description": "Link Laboratory — link building orders, authority signals, outreach"
     },
     {
-      "name": "searchatlas_llm_visibility",
-      "description": "LLM brand monitoring — tracks AI model references to your brand"
+      "name": "dpr_list_campaigns",
+      "description": "Digital PR — campaigns, press releases, authority outreach"
     },
     {
-      "name": "searchatlas_keywords",
-      "description": "Keyword research — volume, difficulty, SERP analysis, clustering"
+      "name": "llmv_list_projects",
+      "description": "LLM Visibility — track AI model references to your brand"
     },
     {
-      "name": "searchatlas_website_studio",
-      "description": "Website builder — pages, layouts, site structure"
+      "name": "krt_list_projects",
+      "description": "Keyword Rank Tracking — monitor positions, SERP analysis, clustering"
     },
     {
-      "name": "searchatlas_list_projects",
-      "description": "List SearchAtlas projects for the authenticated user"
+      "name": "bv_list",
+      "description": "Brand Vault — AI content settings, brand voice, knowledge base"
     },
     {
-      "name": "searchatlas_create_project",
-      "description": "Create a new SearchAtlas project"
+      "name": "ws_list_projects",
+      "description": "Website Studio — page builder, layouts, site structure"
     },
     {
-      "name": "searchatlas_list_conversations",
-      "description": "List conversation sessions, optionally filtered by agent"
+      "name": "gsc_get_sites",
+      "description": "Google Search Console — property list, page/keyword performance"
     },
     {
-      "name": "searchatlas_list_artifacts",
-      "description": "List artifacts (code, content, reports) across sessions"
+      "name": "social_hub_list_posts",
+      "description": "Social Hub — manage and schedule social media posts"
     },
     {
-      "name": "searchatlas_list_playbooks",
-      "description": "List available playbooks (automation recipes)"
+      "name": "cs_list_templates",
+      "description": "Content Strategy — templates, plans, editorial calendars"
     },
     {
-      "name": "searchatlas_run_playbook",
-      "description": "Execute a playbook on a project using the appropriate agent"
+      "name": "kg_list",
+      "description": "Knowledge Graph — entities used in press release and cloud stack content"
+    },
+    {
+      "name": "dkn_list_nodes",
+      "description": "Domain Knowledge Network — interlinked content hubs"
+    },
+    {
+      "name": "indexer_submit_batch",
+      "description": "Indexer — batch URL submission and indexing status"
+    },
+    {
+      "name": "rb_list_reports",
+      "description": "Report Builder — SEO and performance reports"
+    },
+    {
+      "name": "pr_list",
+      "description": "Press Release workflow — drafting, publishing, distribution"
     }
   ]
 }

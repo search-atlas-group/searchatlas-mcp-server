@@ -7,7 +7,9 @@
 
 **[npm](https://www.npmjs.com/package/searchatlas-mcp-server)** · **[MCP Registry](https://registry.modelcontextprotocol.io)** · **[GitHub](https://github.com/Search-Atlas-Group/searchatlas-mcp-server)**
 
-Connect any MCP-compatible AI client to the **SearchAtlas AI Agent platform** — 10 specialized SEO & marketing agents, project management, playbook automation, and more.
+Connect any MCP-compatible AI client to the **SearchAtlas v2 MCP server** — 500+ tools covering OTTO SEO, PPC, Content Genius, Site Explorer, Google Business Profile, Local SEO, Link Laboratory, Digital PR, LLM Visibility, keyword research, and more.
+
+This package runs as a thin stdio bridge to the hosted v2 MCP server at `https://mcp.searchatlas.com/mcp/` so it works with clients that only speak stdio. Clients with native Streamable-HTTP support can connect to the remote endpoint directly.
 
 Works with **Claude Code, Cursor, Claude Desktop, VS Code, Windsurf, and Zed**.
 
@@ -188,9 +190,9 @@ searchatlas check
   SearchAtlas MCP Server — Health Check
 
   ✓ Credential source: ~/.searchatlasrc
-  ✓ Config loaded successfully
+  ✓ Config loaded successfully (endpoint: https://mcp.searchatlas.com/mcp)
   ✓ JWT structure valid (expires in 12 days) — user 42
-  ✓ API reachable and authenticated
+  ✓ MCP handshake succeeded — 587 tools available
 
   All checks passed — you're ready to go!
 ```
@@ -238,33 +240,34 @@ Just talk naturally. The AI picks the right tool:
 
 ---
 
-## Tools (16)
+## Tools
 
-### Agents (10)
+Tools are discovered dynamically from the hosted v2 MCP server — your client sees the live catalogue (currently ~587 tools) without needing a package update when new ones ship. The major groups:
 
-| Tool | What It Does |
-|------|-------------|
-| `searchatlas_orchestrator` | Routes queries to the best specialist agent |
-| `searchatlas_otto_seo` | Technical SEO fixes, schema markup, optimizations |
-| `searchatlas_ppc` | Google Ads campaigns, bids, performance |
-| `searchatlas_content` | Blog posts, landing pages, optimized copy |
-| `searchatlas_site_explorer` | Crawl data, backlinks, competitive intelligence |
-| `searchatlas_gbp` | Google Business Profile, reviews, local SEO |
-| `searchatlas_authority_building` | Link building, digital PR, outreach |
-| `searchatlas_llm_visibility` | Track AI model references to your brand |
-| `searchatlas_keywords` | Search volume, difficulty, SERP analysis |
-| `searchatlas_website_studio` | Page builder, layouts, site structure |
+| Prefix | Area | Representative tools |
+|--------|------|----------------------|
+| `otto_*` | OTTO SEO automation (70 tools) | `otto_list_projects`, `otto_add_site`, `otto_get_dynamic_optimizations` |
+| `ppc_*` | Google Ads / PPC (76 tools) | `ppc_list_accounts`, `ppc_create_campaign`, `ppc_get_keyword_performance` |
+| `cg_*` | Content Genius (74 tools) | `cg_list_articles`, `cg_edit_article_content`, `cg_generate_content_brief` |
+| `se_*` | Site Explorer (46 tools) | `se_list_sites`, `se_get_details`, `se_backlinks_overview` |
+| `gbp_*` | Google Business Profile (96 tools) | `gbp_get_business_categories`, `gbp_list_citation_submissions` |
+| `local_seo_*` | Local SEO heatmaps (19 tools) | `local_seo_heatmaps_get_heatmap_details`, `local_seo_heatmaps_get_rank` |
+| `ll_*` | Link Laboratory (24 tools) | `ll_list_projects`, `ll_create_order` |
+| `dpr_*` | Digital PR (20 tools) | `dpr_list_campaigns`, `dpr_create_campaign` |
+| `llmv_*` | LLM Visibility (30 tools) | `llmv_list_projects`, `llmv_get_visibility_report` |
+| `krt_*` | Keyword Rank Tracking (16 tools) | `krt_list_projects`, `krt_track_keywords` |
+| `bv_*` | Brand Vault (25 tools) | `bv_list`, `bv_ask`, `bv_update_business_info` |
+| `ws_*` | Website Studio (8 tools) | `ws_list_projects`, `ws_create_project` |
+| `gsc_*` | Google Search Console (11 tools) | `gsc_get_sites`, `gsc_get_keyword_performance` |
+| `social_hub_*` | Social Hub (19 tools) | `social_hub_list_posts`, `social_hub_create_post` |
+| `cs_*` | Content Strategy (12 tools) | `cs_list_templates`, `cs_create` |
+| `kg_*` | Knowledge Graph (7 tools) | `kg_list`, `kg_create_entity` |
+| `dkn_*` | Domain Knowledge Network (7 tools) | `dkn_list_nodes`, `dkn_create` |
+| `indexer_*` | Indexer (6 tools) | `indexer_submit_batch`, `indexer_check_status` |
+| `rb_*` | Report Builder (3 tools) | `rb_list_reports`, `rb_get_report_details` |
+| `pr_*` | Press Release (14 tools) | `pr_list`, `pr_write`, `pr_update` |
 
-### Management (6)
-
-| Tool | What It Does |
-|------|-------------|
-| `searchatlas_list_projects` | List projects (paginated, searchable) |
-| `searchatlas_create_project` | Create project by domain |
-| `searchatlas_list_conversations` | List chat sessions by agent |
-| `searchatlas_list_artifacts` | List generated content and reports |
-| `searchatlas_list_playbooks` | Browse automation playbooks |
-| `searchatlas_run_playbook` | Run a playbook on a project |
+Run `searchatlas check` to see the live count, or ask your MCP client to list tools after connecting.
 
 ---
 
@@ -282,7 +285,15 @@ Just talk naturally. The AI picks the right tool:
 |----------|----------|-------------|
 | `SEARCHATLAS_TOKEN` | Yes | JWT token from SearchAtlas |
 | `SEARCHATLAS_API_KEY` | Alternative | API key auth |
-| `SEARCHATLAS_API_URL` | No | Custom API URL (default: `https://mcp.searchatlas.com`) |
+| `SEARCHATLAS_API_URL` | No | Custom v2 MCP endpoint (default: `https://mcp.searchatlas.com/mcp`) |
+
+### Native Streamable-HTTP clients
+
+If your MCP client supports Streamable HTTP directly, you can skip this npm package and connect to the remote server in one step:
+
+- **URL**: `https://mcp.searchatlas.com/mcp/`
+- **Transport**: Streamable HTTP (JSON-RPC + SSE)
+- **Header**: `Authorization: Bearer <SEARCHATLAS_TOKEN>`
 
 ---
 

@@ -63,7 +63,7 @@ function loadRcFile(): Record<string, string> {
   }
 }
 
-const DEFAULT_API_URL = "https://mcp.searchatlas.com";
+const DEFAULT_API_URL = "https://mcp.searchatlas.com/mcp";
 
 /**
  * Validate that an API URL is allowed.

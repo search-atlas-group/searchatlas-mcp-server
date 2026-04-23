@@ -32,7 +32,7 @@ if (args.includes("--help") || args.includes("-h") || args.includes("help")) {
   Environment variables:
     SEARCHATLAS_TOKEN     JWT token (preferred)
     SEARCHATLAS_API_KEY   API key (alternative)
-    SEARCHATLAS_API_URL   API base URL (default: https://mcp.searchatlas.com)
+    SEARCHATLAS_API_URL   API base URL (default: https://mcp.searchatlas.com/mcp)
 
   Config file:
     ~/.searchatlasrc      Auto-read on startup (created by 'login' command)
@@ -72,25 +72,14 @@ else if (args.includes("check")) {
     process.exit(1);
   }
 }
-// default: start MCP server
+// default: start MCP proxy (stdio → Streamable HTTP → v2 remote server)
 else {
   try {
-    const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-    const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
     const { loadConfig } = await import("./config.js");
-    const { registerAllTools } = await import("./tools/register-all.js");
+    const { startProxy } = await import("./proxy.js");
 
     const config = loadConfig();
-
-    const server = new McpServer({
-      name: "searchatlas",
-      version: VERSION,
-    });
-
-    registerAllTools(server, config);
-
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
+    await startProxy(config, { name: "searchatlas", version: VERSION });
   } catch (err) {
     // Write to stderr — stdout is reserved for MCP protocol transport
     const msg = err instanceof Error ? err.message : String(err);

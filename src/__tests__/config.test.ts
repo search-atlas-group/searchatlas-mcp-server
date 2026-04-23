@@ -40,7 +40,7 @@ describe("loadConfig", () => {
 
     const config = loadConfig();
     expect(config.token).toBeDefined();
-    expect(config.apiUrl).toBe("https://mcp.searchatlas.com");
+    expect(config.apiUrl).toBe("https://mcp.searchatlas.com/mcp");
   });
 
   it("loads API key from environment variable", () => {

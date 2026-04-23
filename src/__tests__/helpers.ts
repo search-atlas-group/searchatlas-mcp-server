@@ -31,7 +31,7 @@ export function createExpiredJWT(payload: Record<string, unknown> = {}): string 
 /** Create a test Config object. */
 export function createTestConfig(overrides: Record<string, unknown> = {}) {
   return {
-    apiUrl: "https://mcp.searchatlas.com",
+    apiUrl: "https://mcp.searchatlas.com/mcp",
     token: createTestJWT(),
     ...overrides,
   };

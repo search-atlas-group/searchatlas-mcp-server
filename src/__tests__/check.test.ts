@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createTestJWT, createExpiredJWT } from "./helpers.js";
 
-// Mock modules
+// Mock modules before importing the SUT.
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return {
@@ -15,16 +15,31 @@ vi.mock("../config.js", () => ({
   loadConfig: vi.fn(),
 }));
 
-const mockFetch = vi.fn();
-vi.stubGlobal("fetch", mockFetch);
+// Stub the proxy transport factory so the test never touches the network.
+vi.mock("../proxy.js", () => ({
+  createUpstreamTransport: vi.fn(() => ({})),
+}));
 
-import { existsSync, readFileSync } from "node:fs";
+// Control what the MCP client does during connect() and listTools().
+const mockConnect = vi.fn<(transport: unknown) => Promise<void>>();
+const mockListTools = vi.fn<() => Promise<{ tools: Array<{ name: string }> }>>();
+const mockClose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+
+vi.mock("@modelcontextprotocol/sdk/client/index.js", () => {
+  class MockClient {
+    connect = mockConnect;
+    listTools = mockListTools;
+    close = mockClose;
+  }
+  return { Client: MockClient };
+});
+
+import { existsSync } from "node:fs";
 import { loadConfig } from "../config.js";
 import { runCheck } from "../check.js";
 
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedLoadConfig = vi.mocked(loadConfig);
-const mockedReadFileSync = vi.mocked(readFileSync);
 
 describe("runCheck", () => {
   const originalEnv = { ...process.env };
@@ -32,6 +47,7 @@ describe("runCheck", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockClose.mockResolvedValue(undefined);
     consoleOutput = [];
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       consoleOutput.push(args.join(" "));
@@ -45,14 +61,21 @@ describe("runCheck", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes all checks with valid token and successful API call", async () => {
+  function successfulProbe(toolCount = 587): void {
+    mockConnect.mockResolvedValue(undefined);
+    mockListTools.mockResolvedValue({
+      tools: Array.from({ length: toolCount }, (_, i) => ({ name: `tool_${i}` })),
+    });
+  }
+
+  it("passes all checks with valid token and a working MCP handshake", async () => {
     process.env.SEARCHATLAS_TOKEN = createTestJWT();
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createTestJWT(),
     });
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    successfulProbe(587);
 
     await runCheck();
 
@@ -60,18 +83,35 @@ describe("runCheck", () => {
     expect(output).toContain("✓");
     expect(output).toContain("SEARCHATLAS_TOKEN env var");
     expect(output).toContain("Config loaded");
+    expect(output).toContain("https://mcp.searchatlas.com/mcp");
     expect(output).toContain("JWT structure valid");
-    expect(output).toContain("API reachable");
+    expect(output).toContain("MCP handshake succeeded");
+    expect(output).toContain("587 tools");
     expect(output).toContain("All checks passed");
+  });
+
+  it("uses singular 'tool' when exactly one is available", async () => {
+    process.env.SEARCHATLAS_TOKEN = createTestJWT();
+    mockedExistsSync.mockReturnValue(false);
+    mockedLoadConfig.mockReturnValue({
+      apiUrl: "https://mcp.searchatlas.com/mcp",
+      token: createTestJWT(),
+    });
+    successfulProbe(1);
+
+    await runCheck();
+
+    const output = consoleOutput.join("\n");
+    expect(output).toContain("1 tool available");
   });
 
   it("reports credential source from rc file", async () => {
     mockedExistsSync.mockReturnValue(true);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createTestJWT(),
     });
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    successfulProbe();
 
     await runCheck();
 
@@ -83,10 +123,10 @@ describe("runCheck", () => {
     process.env.SEARCHATLAS_API_KEY = "test-key";
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       apiKey: "test-key",
     });
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    successfulProbe();
 
     await runCheck();
 
@@ -98,10 +138,10 @@ describe("runCheck", () => {
   it("fails when no credentials found", async () => {
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createTestJWT(),
     });
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    successfulProbe();
 
     await runCheck();
 
@@ -121,17 +161,17 @@ describe("runCheck", () => {
 
     const output = consoleOutput.join("\n");
     expect(output).toContain("Config failed to load");
-    expect(output).not.toContain("API reachable");
+    expect(output).not.toContain("MCP handshake");
   });
 
   it("reports expired JWT", async () => {
     process.env.SEARCHATLAS_TOKEN = "x";
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createExpiredJWT(),
     });
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    successfulProbe();
 
     await runCheck();
 
@@ -140,96 +180,80 @@ describe("runCheck", () => {
     expect(output).toContain("expired");
   });
 
-  it("reports API 401 rejection", async () => {
+  it("classifies 401 auth errors as auth rejection", async () => {
     process.env.SEARCHATLAS_TOKEN = "x";
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createTestJWT(),
     });
-    mockFetch.mockResolvedValue({ ok: false, status: 401 });
+    mockConnect.mockRejectedValue(new Error("HTTP 401 Unauthorized"));
 
     await runCheck();
 
     const output = consoleOutput.join("\n");
-    expect(output).toContain("authentication rejected");
+    expect(output).toContain("rejected authentication");
   });
 
-  it("reports API 403 rejection", async () => {
+  it("classifies 'Unauthorized' errors as auth rejection", async () => {
     process.env.SEARCHATLAS_TOKEN = "x";
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createTestJWT(),
     });
-    mockFetch.mockResolvedValue({ ok: false, status: 403 });
+    mockConnect.mockRejectedValue(new Error("Unauthorized session"));
 
     await runCheck();
 
     const output = consoleOutput.join("\n");
-    expect(output).toContain("authentication rejected");
+    expect(output).toContain("rejected authentication");
   });
 
-  it("reports unexpected API status", async () => {
+  it("reports an unreachable server with the underlying message", async () => {
     process.env.SEARCHATLAS_TOKEN = "x";
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createTestJWT(),
     });
-    mockFetch.mockResolvedValue({ ok: false, status: 502, statusText: "Bad Gateway" });
+    mockConnect.mockRejectedValue(new Error("ECONNREFUSED"));
 
     await runCheck();
 
     const output = consoleOutput.join("\n");
-    expect(output).toContain("unexpected status 502");
-  });
-
-  it("reports network error", async () => {
-    process.env.SEARCHATLAS_TOKEN = "x";
-    mockedExistsSync.mockReturnValue(false);
-    mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
-      token: createTestJWT(),
-    });
-    mockFetch.mockRejectedValue(new Error("ECONNREFUSED"));
-
-    await runCheck();
-
-    const output = consoleOutput.join("\n");
-    expect(output).toContain("API unreachable");
+    expect(output).toContain("MCP server unreachable");
     expect(output).toContain("ECONNREFUSED");
   });
 
-  it("reports non-Error network failures", async () => {
+  it("handles non-Error rejection values", async () => {
     process.env.SEARCHATLAS_TOKEN = "x";
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createTestJWT(),
     });
-    mockFetch.mockRejectedValue("string error");
+    mockConnect.mockRejectedValue("string error");
 
     await runCheck();
 
     const output = consoleOutput.join("\n");
-    expect(output).toContain("API unreachable");
-    expect(output).toContain("Check your network");
+    expect(output).toContain("MCP server unreachable");
+    expect(output).toContain("string error");
   });
 
   it("shows JWT expiry days and user ID when token has both", async () => {
     process.env.SEARCHATLAS_TOKEN = "x";
     mockedExistsSync.mockReturnValue(false);
-    // Token that expires in ~30 days with user_id
     const token = createTestJWT({
       user_id: "test-user-42",
       exp: Math.floor(Date.now() / 1000) + 30 * 86400,
     });
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token,
     });
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    successfulProbe();
 
     await runCheck();
 
@@ -244,13 +268,13 @@ describe("runCheck", () => {
     mockedExistsSync.mockReturnValue(false);
     const token = createTestJWT({
       user_id: "u1",
-      exp: Math.floor(Date.now() / 1000) + 86400 + 100, // ~1 day
+      exp: Math.floor(Date.now() / 1000) + 86400 + 100,
     });
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token,
     });
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    successfulProbe();
 
     await runCheck();
 
@@ -272,24 +296,34 @@ describe("runCheck", () => {
     expect(output).toContain("string config error");
   });
 
-  it("pass function without fix message prints only pass", async () => {
-    // This tests the `fail` function without a fix message
-    // We trigger it via "no credentials" path which has a fix message
-    // We need a path where fail is called without fix — that doesn't exist
-    // But we can test fail() with fix set
+  it("does not print expiry when the token has no exp claim", async () => {
     process.env.SEARCHATLAS_TOKEN = "x";
     mockedExistsSync.mockReturnValue(false);
     mockedLoadConfig.mockReturnValue({
-      apiUrl: "https://mcp.searchatlas.com",
+      apiUrl: "https://mcp.searchatlas.com/mcp",
       token: createTestJWT({ exp: undefined }),
     });
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    successfulProbe();
 
     await runCheck();
 
     const output = consoleOutput.join("\n");
     expect(output).toContain("JWT structure valid");
-    // No expiry info since exp is undefined
     expect(output).not.toContain("expires in");
+  });
+
+  it("swallows errors from client.close()", async () => {
+    process.env.SEARCHATLAS_TOKEN = createTestJWT();
+    mockedExistsSync.mockReturnValue(false);
+    mockedLoadConfig.mockReturnValue({
+      apiUrl: "https://mcp.searchatlas.com/mcp",
+      token: createTestJWT(),
+    });
+    successfulProbe(10);
+    mockClose.mockRejectedValue(new Error("close failed"));
+
+    await expect(runCheck()).resolves.not.toThrow();
+    const output = consoleOutput.join("\n");
+    expect(output).toContain("MCP handshake succeeded");
   });
 });

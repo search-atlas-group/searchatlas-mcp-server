@@ -1,5 +1,6 @@
 /**
- * Health check CLI — validates the full authentication chain.
+ * Health check CLI — validates the full authentication chain against the
+ * SearchAtlas v2 MCP server.
  *
  * Usage: searchatlas check
  *
@@ -7,16 +8,16 @@
  *   1. Credential source found?
  *   2. Config loads without error?
  *   3. JWT valid + not expired?
- *   4. API reachable?
- *   5. Auth accepted?
+ *   4. MCP handshake succeeds (Streamable HTTP initialize + tools/list)?
  */
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { loadConfig, type Config } from "./config.js";
 import { validateToken } from "./utils/token.js";
-import { getAuthHeaders } from "./utils/auth.js";
+import { createUpstreamTransport } from "./proxy.js";
 
 const PASS = "  ✓";
 const FAIL = "  ✗";
@@ -28,6 +29,22 @@ function pass(msg: string): void {
 function fail(msg: string, fix?: string): void {
   console.log(`${FAIL} ${msg}`);
   if (fix) console.log(`    → ${fix}`);
+}
+
+/** Probe the remote v2 MCP server: connect, list tools, disconnect. */
+async function probeRemoteMcp(config: Config): Promise<{ toolCount: number }> {
+  const client = new Client(
+    { name: "searchatlas-check", version: "1.0" },
+    { capabilities: {} }
+  );
+  const transport = createUpstreamTransport(config);
+  await client.connect(transport);
+  try {
+    const { tools } = await client.listTools();
+    return { toolCount: tools.length };
+  } finally {
+    await client.close().catch(() => { /* best effort */ });
+  }
 }
 
 export async function runCheck(): Promise<void> {
@@ -59,7 +76,7 @@ export async function runCheck(): Promise<void> {
   // Step 2: Config loads
   try {
     config = loadConfig();
-    pass("Config loaded successfully");
+    pass(`Config loaded successfully (endpoint: ${config.apiUrl})`);
   } catch (err) {
     fail(
       "Config failed to load",
@@ -92,35 +109,21 @@ export async function runCheck(): Promise<void> {
     pass("Using API key authentication (JWT check skipped)");
   }
 
-  // Step 4 & 5: API reachable + auth accepted
+  // Step 4: MCP handshake + tools/list against the remote v2 server
   try {
-    const url = `${config.apiUrl}/api/agent/projects/?page=1&page_size=1`;
-    const res = await fetch(url, {
-      method: "GET",
-      headers: getAuthHeaders(config),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (res.status === 401 || res.status === 403) {
+    const { toolCount } = await probeRemoteMcp(config);
+    pass(`MCP handshake succeeded — ${toolCount} tool${toolCount === 1 ? "" : "s"} available`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // The SDK surfaces 401/403 as an UnauthorizedError-like message.
+    if (/401|403|unauthor/i.test(msg)) {
       fail(
-        `API returned ${res.status} — authentication rejected`,
+        "MCP server rejected authentication",
         "Your token may be expired. Run: npx searchatlas-mcp-server login",
       );
-      allPassed = false;
-    } else if (res.ok) {
-      pass("API reachable and authenticated");
     } else {
-      fail(
-        `API returned unexpected status ${res.status}`,
-        "Check your network or try again later",
-      );
-      allPassed = false;
+      fail("MCP server unreachable", msg);
     }
-  } catch (err) {
-    fail(
-      "API unreachable",
-      err instanceof Error ? err.message : "Check your network connection",
-    );
     allPassed = false;
   }
 
